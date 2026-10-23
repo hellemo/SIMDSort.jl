@@ -145,15 +145,15 @@ function sort_keys!(p::Ptr{T}, n::Int, ntasks::Int=1) where {T}
 end
 
 """
-    presorted!(k) -> Bool
+    presorted!(k, rev=false) -> Bool
 
-Return `true` if `k` is sorted, after reversing it if it is in non-increasing
-order. Both scans stop at the first key out of order, so random inputs cost
+Return `true` if `k` is sorted (in reverse if `rev`), after reversing it if it is
+in the opposite order. Both scans stop at the first key out of order, so random inputs cost
 almost nothing.
 """
-function presorted!(k::AbstractVector)
-    issorted(k) && return true
-    if issorted(k; rev=true)
+function presorted!(k::AbstractVector, rev::Bool=false)
+    issorted(k; rev) && return true
+    if issorted(k; rev=!rev)
         reverse!(k)
         return true
     end
