@@ -66,24 +66,26 @@ end
 
 @inline exhausted(ks::ByteKeys, i::Int, off::Int) = off >= 8 * @inbounds(ks.len[i])
 
-# Bits [off, off + K) of the zero-padded byte string, K ≤ 63: they lie within
-# the 9 bytes from byte off ÷ 8. Bytes past the end read as zero; no byte past
-# the end is loaded.
+# Bits [off, off + K) of the zero-padded byte string, K ≤ 63. They lie within the
+# 9 bytes from byte off ÷ 8: the first 8 come from one big-endian load when they
+# are all inside the string, the ninth only supplies the low bits for a shift.
+# Bytes past the end read as zero; no byte past the end is loaded.
 @inline function keybits(ks::ByteKeys, i::Int, off::Int, K::Int)
     p = @inbounds ks.ptr[i]
     len = @inbounds ks.len[i]
     b = off >> 3
-    w = zero(UInt128)
-    if b + 9 <= len
-        @inbounds for j in 0:8
-            w |= UInt128(unsafe_load(p, b + j + 1)) << (120 - 8j)
-        end
+    s = off & 7
+    if b + 8 <= len
+        hi = ntoh(unsafe_load(Ptr{UInt64}(p + b)))
     else
-        @inbounds for j in 0:min(8, len - b - 1)
-            w |= UInt128(unsafe_load(p, b + j + 1)) << (120 - 8j)
+        hi = zero(UInt64)
+        for j in 0:min(7, len - b - 1)
+            hi |= UInt64(unsafe_load(p, b + j + 1)) << (56 - 8j)
         end
     end
-    x = ((w << (off & 7)) >> (128 - K)) % UInt64
+    lo = b + 8 < len ? unsafe_load(p, b + 9) : 0x00
+    x = s == 0 ? hi : (hi << s) | (UInt64(lo) >> (8 - s))
+    x >>= 64 - K
     return ks.rev ? ~x & ((one(UInt64) << K) - one(UInt64)) : x
 end
 
@@ -152,10 +154,24 @@ function refine!(ks::KeySource, perm::AbstractVector{Int}, off::Int, ntasks::Int
     K = 64 - ib
     mask = (one(UInt64) << ib) - one(UInt64)
     keys = Vector{UInt64}(undef, m)
-    foreach_range(m, ntasks) do r
-        @inbounds for j in r
-            keys[j] = (keybits(ks, perm[j], off, K) << ib) | UInt64(j - 1)
+    while true
+        foreach_range(m, ntasks) do r
+            @inbounds for j in r
+                keys[j] = (keybits(ks, perm[j], off, K) << ib) | UInt64(j - 1)
+            end
         end
+        # Skip bits that all keys of the run share (long common prefixes, as in
+        # "id%010d"): a window with no differences needs no sort.
+        k1 = keys[1] >> ib
+        d = mapreduce(x -> (x >> ib) ⊻ k1, |, keys)
+        if d == 0
+            off += K
+            all(i -> exhausted(ks, i, off), perm) && return finish_ties!(ks, perm)
+            continue
+        end
+        c = leading_zeros(d) - (64 - K)          # common leading bits in the window
+        c < 8 && break
+        off += c
     end
     simdsort!(keys; ntasks)
     old = copy(perm)
