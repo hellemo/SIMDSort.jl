@@ -4,6 +4,20 @@
 A vectorized quicksort for primitive numeric vectors, written in Julia on top of
 SIMD.jl. See `docs/DESIGN.md` for the algorithm and its sources.
 """
+# Sources, cited in the code by these tags (full references in README.md and
+# docs/DESIGN.md):
+#   [Hoa62]  Hoare, Quicksort (1962)                      sort.jl: qsort!
+#   [Mus97]  Musser, introspective sorting (1997)         sort.jl: depth limit
+#   [Bat68]  Batcher, sorting networks (1968)             network.jl
+#   [Bra17]  Bramas, AVX-512 hybrid quicksort (2017)      partition.jl
+#   [WBGS22] Wassenberg et al., vqsort (2022)             partition.jl, sort.jl, network.jl
+#   [F5]     Arman & Loguinov, F5 MSD radix sort          network.jl (zigzag merges),
+#                                                         sort.jl (double min/max leaves),
+#                                                         perm.jl (common-prefix skip)
+#   [MBM93]  McIlroy, Bostic & McIlroy, radix sort (1993) perm.jl (MSD refinement)
+# Everything else (key maps, prefetch, three-way partition, parallel partition,
+# counting sort, windowed keys, string prefix cache, bignum encodings) is this
+# package's own design or textbook technique.
 module SIMDQuickSort
 
 using SIMD

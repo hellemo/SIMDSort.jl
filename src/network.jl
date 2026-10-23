@@ -1,6 +1,13 @@
 # Base case: a vectorized sorting network over an R × N matrix held in R registers
 # of N lanes (docs/DESIGN.md §5). The network code is generated at compile time
 # from the comparator lists below.
+#
+# [Bat68]: odd-even merge sort and merge networks (batcher_pairs,
+# batcher_merge_pairs); [WBGS22 §2.3, §3]: base case in a register matrix,
+# column sort by one vector min/max per comparator, merging columns without
+# transposing first (network_body); [F5 §III, Algorithm 3]: zigzag merges
+# (zigzag_body). Our own: the two-halves split (halves_body) and the generator
+# that derives the zigzag column permutations by simulation.
 
 # Comparators of Batcher's odd-even merge sort on `n` (a power of two) inputs,
 # 0-based. 63 comparators for n = 16.

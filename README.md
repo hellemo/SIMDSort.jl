@@ -15,9 +15,8 @@
 >
 > This will stay so until the changes are merged into SIMD.jl and released.
 
-An experimental vectorized quicksort in pure Julia for `Int32`, `Int64`, `UInt32`,
-`UInt64`, `Float32` and `Float64` vectors. It is built on the SIMD.jl fork with
-runtime permutes and compress (`vpartition`, `vpermute`), branch
+An experimental vectorized quicksort in pure Julia. It is built on the SIMD.jl
+fork with runtime permutes and compress (`vpartition`, `vpermute`), branch
 [`permute-compress`](https://github.com/hellemo/SIMD.jl/tree/permute-compress).
 
 ```julia
@@ -26,10 +25,23 @@ v = rand(Int32, 10^8)
 simdsort!(v)                                  # one thread
 simdsort!(v; ntasks = Threads.nthreads())     # task parallel
 simdsort(v; rev = true)                       # sorted copy, reverse order
+p = simdsortperm(v)                           # stable, as sortperm
 ```
 
-The order is that of `isless`: NaNs last, `-0.0` before `0.0`. Other element types
-and other array types fall back to `sort!`.
+The order is that of `isless`: NaNs last, `-0.0` before `0.0`. `simdsortperm` is
+stable, like `sortperm`.
+
+Supported element types (in `Vector`s):
+
+| Group | Types |
+|---|---|
+| Vectorized quicksort | `Int32`, `Int64`, `UInt32`, `UInt64`, `Float32`, `Float64` |
+| Strings | `String`, `SubString{String}`, `StringView` (Julia 1.14+), `Symbol` |
+| Wide and arbitrary-precision numbers | `Int128`, `UInt128`, BitIntegers.jl types, `BigInt`, `BigFloat` |
+| Through extensions (weak dependencies) | Dates (`Date`, `DateTime`, `Time`, Periods), DoubleFloats.jl, MultiFloats.jl, Quadmath.jl (`Float128`) |
+| Composite | `Tuple`s and `Pair`s of the above, `VersionNumber` |
+
+Other element types and other array types fall back to `sort!`/`sortperm`.
 
 ## How it works
 
@@ -54,9 +66,18 @@ implementation deviates from the papers.
   - When the sample shows many copies of the pivot, the block of equal keys is
     split off.
   - Ranges of equal keys are detected by a vector min/max scan.
-- **Base case:** a vectorized sorting network for up to 256 32-bit or 128 64-bit
-  keys: Batcher's network sorts the columns, then bitonic merges without
-  transposes, and one final transpose.
+- **Base case:** vectorized sorting networks for up to 256 32-bit or 128 64-bit
+  keys.
+  - Batcher's network sorts the columns.
+  - F5-style zigzag merges (Arman & Loguinov) merge them: odd-row reversal,
+    odd-even column merges, then diagonal block exchanges.
+  - The 32-row networks are built from two 16-row halves so that they fit in the
+    16 AVX2 registers.
+  - 64-bit integer leaves are sorted with double min/max (also from F5).
+- **Other types:** a key window and the element's position are packed into a
+  `UInt64`, the packed keys are sorted, and runs of equal windows are refined with
+  the next window, as in an MSD radix sort (McIlroy, Bostic & McIlroy). Strings
+  use a cached 16-byte prefix; Symbols use the ranks of their distinct names.
 - **Fallbacks and parallelism:**
   - beyond a depth of $2\log_2 n + 4$, `Base.sort!` takes over;
   - with `ntasks > 1`, large ranges are partitioned in parallel and the smaller
@@ -115,13 +136,13 @@ ideas that were rejected. `bench/profile.jl` reproduces the breakdown.
 - Tuned and tested on one AVX2 machine only, with 256-bit vectors.
   - CPUs without AVX2 (and ARM) get SIMD.jl's portable lowering. It is correct
     and covered by the tests with `SIMD_JL_GENERIC=1`, but about 4× slower.
-  - AVX-512 machines use LLVM's compress intrinsic. That path is untested here.
-  - A tuned AVX-512 path (native `vpcompress`, 512-bit vectors) is the obvious
-    next step.
-- Only plain vectors of the six primitive types are vectorized. There is no
-  `sortperm`, `by` or `lt`.
-- The sort is not stable. This only matters for distinguishable equal keys, such
-  as NaNs with different payloads.
+  - On AVX-512 the code selects the single 32-row network and native 64-bit
+    min/max, but has not been measured there. [docs/AVX512.md](docs/AVX512.md)
+    describes what remains to be measured, and `bench/avx512.jl` measures it.
+- No `by` or `lt` keywords.
+- `simdsort!` on the six primitive types is not stable. This only matters for
+  distinguishable equal keys, such as NaNs with different payloads.
+  `simdsortperm`, and `simdsort!` on all other types, are stable.
 - Depends on the unreleased SIMD.jl fork (see the warning at the top).
 
 ## Tests
@@ -135,13 +156,37 @@ Passes on Julia 1.10, 1.13 and 1.14-alpha, and with the portable lowering.
 
 ## References
 
-- J. Wassenberg, M. Blacher, J. Giesen, P. Sanders. *Vectorized and
+Papers whose ideas are used. The code names them where they are applied (see
+the source map at the top of `src/SIMDQuickSort.jl`):
+
+- **[WBGS22]** J. Wassenberg, M. Blacher, J. Giesen, P. Sanders. *Vectorized and
   performance-portable quicksort.* Software: Practice and Experience 52(12), 2022.
-  [arXiv:2205.05982](https://arxiv.org/abs/2205.05982)
-- B. Bramas. *A Novel Hybrid Quicksort Algorithm Vectorized using AVX-512 on Intel
-  Skylake.* IJACSA 8(10), 2017. [arXiv:1704.08579](https://arxiv.org/abs/1704.08579)
-- K. E. Batcher. *Sorting networks and their applications.* AFIPS 1968.
-- D. R. Musser. *Introspective sorting and selection algorithms.* SPE 27(8), 1997.
+  [arXiv:2205.05982](https://arxiv.org/abs/2205.05982). Used for the recursion,
+  partitioning and pivot sampling, and the register-matrix base case.
+- **[Bra17]** B. Bramas. *A Novel Hybrid Quicksort Algorithm Vectorized using
+  AVX-512 on Intel Skylake.* IJACSA 8(10), 2017.
+  [arXiv:1704.08579](https://arxiv.org/abs/1704.08579). Used for the in-place
+  bidirectional partition.
+- **[F5]** A. Arman, D. Loguinov. *F5: A Robust SIMD-Accelerated MSD Radix Sort.*
+  Texas A&M University; listed as ICDE 2026. Used for:
+  - zigzag-merge networks;
+  - double min/max for 64-bit integers;
+  - skipping common key bits.
+- **[Bat68]** K. E. Batcher. *Sorting networks and their applications.* AFIPS
+  1968. Used for the odd-even merge sort and merge networks.
+- **[Hoa62]** C. A. R. Hoare. *Quicksort.* The Computer Journal 5(1), 1962.
+- **[Mus97]** D. R. Musser. *Introspective sorting and selection algorithms.* SPE
+  27(8), 1997. Used for the depth limit with a fallback sort.
+- **[MBM93]** P. M. McIlroy, K. Bostic, M. D. McIlroy. *Engineering radix sort.*
+  Computing Systems 6(1), 1993. Used for the MSD refinement of string keys.
+
+Considered, not implemented (docs/DESIGN.md §7):
+- IPS4o/IPS2Ra (Axtmann, Witt, Ferizovic, Sanders; ACM TOPC 2022,
+  [arXiv:2009.13569](https://arxiv.org/abs/2009.13569));
+- CAFS (frequency counting for few distinct keys).
+
+The implementation is written from these papers. It uses no code from Google
+Highway (vqsort), Intel's x86-simd-sort or F5.
 
 ## License
 

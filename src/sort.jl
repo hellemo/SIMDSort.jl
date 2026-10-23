@@ -1,4 +1,9 @@
 # Pivot selection and the quicksort recursion (docs/DESIGN.md §2 and §4).
+#
+# [Hoa62] quicksort; [WBGS22 Alg. 1]: handling of an empty right side (min/max
+# scan, then the minimum as pivot); [WBGS22 §2.2]: pivot from lane-wise medians
+# of three over randomly placed vectors; [Mus97]: depth limit with a fallback
+# sort; [F5 §III-C]: 64-bit integer leaves sorted with double min/max.
 
 const UNROLL = 8
 
@@ -178,7 +183,7 @@ end
 
 @inline leaf_sort!(p::Ptr{T}, n::Int, buf::Ptr{T}, lo::T, hi::T) where {T} = small_sort!(p, n, buf)
 
-# AVX2 has no 64-bit integer min/max (a compare and two blends), but it has
+# [F5 §III-C] AVX2 has no 64-bit integer min/max (a compare and two blends), but it has
 # vminpd/vmaxpd. If the keys of a leaf lie within [lo, hi] with hi - lo < 2^62,
 # the offsets x - lo, read as Float64 bit patterns, are finite non-negative
 # doubles in the same order as the integers (subnormals included, unless they are

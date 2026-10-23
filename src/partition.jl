@@ -1,4 +1,10 @@
 # In-place, bidirectional vectorized partition (docs/DESIGN.md §3).
+#
+# [Bra17, Algorithm 3]: keys set aside at both ends, the next vectors loaded from
+# the side with less free space, each vector split to both ends. [WBGS22 §2.1]:
+# unrolled loop, the last keys through a buffer. Our own: vpartition + two
+# full-width stores (instead of compress-stores), software prefetch, and the
+# three-way variant.
 # Offsets are 0-based element offsets from the pointer `p`.
 
 @inline vld(::Val{N}, p::Ptr{T}, i::Int) where {N,T} = vload(Vec{N,T}, p + i * sizeof(T))

@@ -1,6 +1,11 @@
 # sortperm, and sorting strings and symbols, on top of the UInt64 quicksort
 # (docs/DESIGN.md §8).
 #
+# Refining runs of equal windows with the next window is the MSD idea of radix
+# sorting strings [MBM93]; skipping bits that all keys of a run share is also
+# used by F5's prefix extractor [F5 §I]. Packing a key window with the element's
+# position, the prefix cache and the symbol ranks are our own design.
+#
 # Every key is viewed as a big-endian bit string: numbers as their 32 or 64 bits in
 # an order-preserving unsigned form, strings as their bytes followed by zeros.
 # A window of K bits of each key goes into the high bits of a UInt64, the

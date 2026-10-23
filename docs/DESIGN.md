@@ -19,6 +19,18 @@ permutation table on AVX2.
 - **[Hoa62]** C. A. R. Hoare. *Quicksort.* The Computer Journal 5(1), 1962.
 - **[Mus97]** D. R. Musser. *Introspective sorting and selection algorithms.*
   Software: Practice and Experience 27(8), 1997.
+- **[F5]** A. Arman, D. Loguinov. *F5: A Robust SIMD-Accelerated MSD Radix Sort.*
+  Texas A&M University; listed by citation databases as ICDE 2026. Used:
+  - zigzag-merge sorting networks (§III, Algorithm 3);
+  - double min/max for 64-bit integer keys (§III-C);
+  - skipping common key bits (§I).
+- **[MBM93]** P. M. McIlroy, K. Bostic, M. D. McIlroy. *Engineering radix sort.*
+  Computing Systems 6(1), 1993. MSD refinement of string keys (§8).
+
+Considered but not implemented (DESIGN §7):
+- **IPS4o/IPS2Ra:** M. Axtmann, S. Witt, D. Ferizovic, P. Sanders. *Engineering
+  in-place (shared-memory) sorting algorithms.* ACM TOPC, 2022. arXiv:2009.13569.
+- **CAFS:** frequency counting for low-cardinality keys.
 
 Notation: $N$ is the number of lanes per vector (8 for 32-bit and 4 for 64-bit keys
 with 256-bit AVX2 vectors), $n$ the length of the range being sorted.
@@ -230,50 +242,71 @@ The pivot is always an input key, as the recursion requires. Random offsets
 protect against inputs constructed to defeat fixed sampling positions; the depth
 limit bounds the remaining risk.
 
-## 5. Base case [WBGS22 §2.3 and §3, Bat68]
+## 5. Base case [WBGS22 §2.3 and §3, Bat68, F5 §III]
 
-Ranges of at most $R \cdot N$ keys are sorted with a vectorized sorting network
-over an $R \times N$ matrix: $R$ registers (rows) of $N$ lanes (columns), with
-$R \in \{N, 2N, 4N\}$ (at most 32) chosen as the smallest that fits: up to 256
-32-bit or 128 64-bit keys. With 16 AVX2 registers the 32-row networks spill, but
-they still measured 2–6% faster overall than a 128/64-key base case. This holds
-for `Int64` too: its 128-key network costs 3.7× the 64-key one, but capping it at
-64 keys measured 2–6% slower overall. As in [WBGS22, §2.3], the
-keys are copied into a buffer, padded with `typemax`, sorted in registers, and the
-first $n$ are copied back.
+**Shape.** Ranges of at most $R \cdot N$ keys are sorted with a vectorized sorting
+network over an $R \times N$ matrix: $R$ registers (rows) of $N$ lanes (columns).
+- $R \in \{N, 2N, 4N\}$, at most 32, is the smallest that fits: up to 256
+  32-bit or 128 64-bit keys.
+- A 128/64-key base case measured 2–6% slower overall, even though it fits in
+  the registers. This holds for `Int64` too.
+- As in [WBGS22, §2.3], the keys are copied into a buffer, padded with `typemax`,
+  sorted in registers, and the first $n$ are copied back.
 
-1. **Column sort.** A sorting network on $R$ inputs is applied across the $R$
-   registers. Every compare-exchange is one vector `min` and one `max` and sorts
-   all $N$ columns at once [WBGS22 §3]. We use Batcher's odd-even merge sort
-   [Bat68] (63 compare-exchanges for $R = 16$; [WBGS22] uses Green's 60). For
-   floats, `min`/`max` are the x86 `vminps`/`vminpd` and `vmaxps`/`vmaxpd`
-   intrinsics on AVX. Julia's `min`/`max` add NaN handling (an extra compare and
-   blend), and LLVM adds the same to a compare-and-select. The inputs never
-   contain NaNs (§1), and doubling the instruction count made the float networks
-   twice as slow as the integer ones.
-   Sorting 128 32-bit keys takes about 80 ns (0.6 ns/key), against 15 ns/key for
-   insertion sort.
-2. **Merging columns without transposing** [WBGS22 §3]. Number the elements
-   column-major, $i = c \cdot R + \rho$ (column $c$, row $\rho$), so each column
-   is a sorted run of length $R$. Bitonic merges [Bat68] combine runs of length
-   $s = R, 2R, \dots, RN/2$:
-   - **Flip step:** $i$ is compared with $i \oplus (2s-1)$. In matrix terms that is
-     row $\rho$ against row $R-1-\rho$, lane $c$ against lane
-     $c \oplus (2s/R - 1)$: one fixed lane shuffle, `min`, `max`, two blends and
-     the shuffle back, per pair of rows.
-   - **Half-cleaner steps** with distance $d = s/2, \dots, 1$: for $d \ge R$ the
-     partner is lane $c \oplus d/R$ in the same register (shuffle, `min`, `max`,
-     blend). For $d < R$ the partner is row $\rho \oplus d$ in the same lane: a
-     plain vector `min`/`max` between two registers.
+**Networks of 16 rows or fewer: zigzag merges [F5 §III, Algorithm 3].**
+1. **Column sort.** Batcher's odd-even merge sort [Bat68] across the $R$
+   registers: every compare-exchange is one vector `min` and one `max` and sorts
+   all $N$ columns at once [WBGS22 §3].
+2. **Zigzag merges** for $k = 1, 2, \dots, N/2$. A sorted run of $rk$ keys in
+   $r$ rows and $k$ lanes is in *$k$-zigzag* order: rows $2t$ and $2t+1$ hold the
+   elements $2j$ and $2j+1$ of each block of $2k$ consecutive keys. Two runs side
+   by side ($2k$ lanes) are merged by:
+   1. reversing every odd row within the $2k$ lanes (one shuffle);
+   2. merging every column with Batcher's odd-even merge across the registers.
+      After the reversal, the even rows of a column come from one run and the odd
+      rows from the other, both sorted. These are plain vector `min`/`max`, with
+      no shuffles;
+   3. for exchange distances $d = 1, 2, \dots, k$, in every pair of rows,
+      swapping lane block $t$ of the upper row with block $t-1$ of the lower row
+      (odd $t$, blocks of $d$ lanes; two two-input shuffles), then
+      compare-exchanging the two rows.
 
-   The element with the lower index always receives the minimum.
-3. **Store.** The result is sorted in column-major order. Each $N \times N$ block is
-   transposed with $\log_2 N$ stages of two-input shuffles (swapping the
-   off-diagonal $h \times h$ sub-blocks for $h = N/2, \dots, 1$). This gives
-   registers in output order, which are stored contiguously.
+   Each merge leaves a $2k$-zigzag run whose columns are in a fixed permutation;
+   for 8 lanes it ends in bit-reversed order $(0, 4, 2, 6, 1, 5, 3, 7)$. [F5]
+   tracks these permutations analytically. Our generator instead simulates the
+   network on ranks when it generates the code (`zigzag_plan`), finds the
+   permutation, and folds it into the next level's reversal masks. The increasing
+   order of exchange distances was found the same way, and agrees with [F5]'s
+   rotation of jump vectors.
+3. **Store.** A final two-row transpose with the permutation folded in gives
+   row-major output.
 
-   [WBGS22] avoid even this final transpose by choosing the permutations in their
-   merges. We accept one transpose per base case for simpler code generation.
+For the 16-row Float64 network (64 keys) this needs 274 `min`/`max`, 80 shuffles
+and no blends, against 318, 80 and 40 for the earlier design. That design merged
+columns with bitonic merges, done without transposing [WBGS22 §3]: a flip step
+plus half-cleaners, and in-register lane steps that use only half of each
+`min`/`max`. The earlier design is kept as `network_body`, used when `ZIGZAG[]` is set to
+`false` (for comparisons).
+
+**32-row networks: two halves.** With 16 AVX2 registers, a 32-row network keeps
+32 registers' worth of keys live in every stage. In the old single network, 45%
+of the instructions (946 of 2093 for Float64) were spill loads and stores.
+- Each half is now sorted with the 16-row network.
+- The halves are merged with one step comparing A[i] with B[last − i]. This is
+  done register pair by register pair, so only two registers are live.
+- Each half then finishes with its own 16-register half-cleaners.
+
+That gives 798 instructions, of which 202 are spill moves. With AVX-512 (32
+registers) the single network is used instead (docs/AVX512.md).
+
+**Inlining.** The networks are inlined into their callers: as separate calls, all
+$R$ vectors went through memory. Together with the split this made Float64 sorts
+5–9% faster, and the zigzag merges another 0–8% (§7.g).
+
+**Floats.** For floats, `min`/`max` are the x86 `vminps`/`vminpd` and
+`vmaxps`/`vmaxpd` intrinsics. Julia's `min`/`max` add NaN handling (an extra
+compare and blend), and LLVM adds the same to a compare-and-select; the inputs
+never contain NaNs (§1).
 
 All networks are generated at compile time (`@generated`), so the base case is
 straight-line code with constant shuffles. Ranges of at most 8 keys use insertion
@@ -492,3 +525,52 @@ gives radix time / quicksort time; below 1, the radix sort is faster.
   be specific to this machine's memory bandwidth per core. It is not
   implemented. Measurements on a server or AVX-512 node would be needed first.
 
+## 8. Other key types: windowed keys
+
+Everything that is not a plain 32/64-bit number goes through one mechanism
+(`src/perm.jl`). Every key is viewed as a big-endian bit string:
+- numbers (`ukey`): the order-preserving unsigned form, with NaNs last;
+- strings: their bytes followed by zeros.
+
+**Windowed sort (`refine!`).**
+1. Take a window of $K = 64 - b$ bits of every key, where $b$ is the number of
+   bits needed for the element's position, and pack it with the position into a
+   `UInt64`.
+2. Sort the `UInt64`s with the quicksort above.
+3. Refine runs whose windows are equal with the next window, as an MSD radix
+   sort refines buckets [MBM93].
+4. Finish runs of up to 64 keys with an insertion sort using a full comparison.
+
+The positions in the low bits make every step stable, so this also gives a
+`sortperm` equal to Base's (`simdsortperm`). Windows that all keys of a run share
+are skipped without sorting; F5's prefix extractor does the same [F5 §I].
+
+**Strings.**
+- `String`, `SubString{String}`, and on Julia 1.14 contiguous `StringView`s are
+  read in place, through pointer and length.
+- The first 16 bytes of every key are cached contiguously, and each run gets its
+  slice of the cache in its new order. Windows and small-run comparisons then
+  rarely touch the string bytes, which removes most cache misses.
+- Byte-equal strings of different length (`"a"` and `"a\0"`) are ordered by
+  length at the end, as `isless` does.
+
+**Symbols.** Symbols are interned, so a hash table maps each symbol to the rank of
+its name among the distinct symbols. The `Int32` ranks are then counted or
+sorted. If more than $n/4$ symbols are distinct, they take the byte path.
+
+**Other numbers and composite types.**
+
+| Type | Key |
+|---|---|
+| `Int128`, `UInt128`, BitIntegers.jl types | their bits, in 63-bit windows |
+| `BigInt` | 8-byte header $2^{63} \pm$ limb count, then the magnitude limbs (complemented if negative) |
+| `BigFloat` | class/exponent header, then the significand in a common number of limbs (complemented if negative); significands via `mpfr_get_z_2exp` |
+| `Float128` (Quadmath.jl) | order-preserving `UInt128` |
+| `MultiFloat{T,N}` (MultiFloats.jl), `Double64`/`Double32` (DoubleFloats.jl) | leading word's key, then the lower words' keys, zeros canonicalized |
+| `Date`, `DateTime`, `Time`, Periods (Dates) | their `Int64`, sorted in place |
+| Tuples, Pairs | fixed-width components packed big-endian into multi-word keys; otherwise one stable `sortperm` per component, last first |
+| `VersionNumber` | packed (major, minor, patch); ties with prerelease or build tags finished with `isless` |
+
+The package types come through extensions (weak dependencies). DoubleFloats'
+`isless` is no total order with NaNs, so Base has no defined result there; NaNs
+go last.
