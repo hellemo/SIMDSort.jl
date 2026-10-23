@@ -210,7 +210,9 @@ register by register. `R` must be a power-of-two multiple of `N`.
     # 64-bit integers keep the single network: their min/max (compare and two
     # blends) make the split version slower (11-16% in the base case).
     split = R > 16 && R ÷ 2 >= N && !(T <: Integer && sizeof(T) == 8)
-    return split ? halves_body(R, N) : network_body(R, N)
+    body = split ? halves_body(R, N) : network_body(R, N)
+    # Inline: a call would pass all R vectors through memory.
+    return Expr(:block, Expr(:meta, :inline), body)
 end
 
 # Copy `n ≤ R*N` keys at `p` to `buf`, pad with typemax, sort, and copy back.
