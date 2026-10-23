@@ -5,6 +5,7 @@ using BitIntegers
 using DoubleFloats
 using MultiFloats
 using Quadmath
+using Dates
 
 const TYPES = (Int32, UInt32, Int64, UInt64, Float32, Float64)
 
@@ -287,6 +288,34 @@ end
             r = simdsort(w)
             @test isnan(r[end]) && issorted(r[1:end-1]) && sort(filter(!isnan, w)) == r[1:end-1]
         end
+    end
+
+    @testset "Dates, Tuples, Pairs, VersionNumber" begin
+        same(v; rev=false, nt=1) = simdsortperm(v; rev, ntasks=nt) == sortperm(v; rev) &&
+                                   isequal(simdsort(v; rev, ntasks=nt), sort(v; rev))
+        ds = Date(1900, 1, 1) .+ Day.(rand(rng, 0:80_000, 30_000))
+        dts = DateTime(1950) .+ Millisecond.(rand(rng, Int64(0):Int64(10)^12, 30_000))
+        ts = Time.(Nanosecond.(rand(rng, 0:86_399_999_999_999, 30_000)))
+        periods = (Day.(rand(rng, -10^6:10^6, 30_000)), Millisecond.(rand(rng, Int64, 30_000)),
+                   Month.(rand(rng, -50:50, 30_000)), Nanosecond.(rand(rng, Int64, 3000)))
+        for v in (ds, dts, ts, periods...)
+            @test all(same(v; rev, nt) for rev in (false, true), nt in (1, 8))
+        end
+        randstr(n) = String(rand(rng, UInt8[0x30:0x39; 0x41:0x5a; 0x61:0x7a], n))
+        tuples = (collect(zip(rand(rng, 1:20, 30_000), rand(rng, Int32, 30_000))),
+                  collect(zip(rand(rng, ["a", "b", "ab", ""], 30_000), rand(rng, [0.0, -0.0, 1.0, NaN], 30_000))),
+                  collect(zip(rand(rng, 1:3, 5000), [randstr(rand(rng, 0:4)) for _ in 1:5000], rand(rng, Bool, 5000))),
+                  [((rand(rng, 1:3), rand(rng, 'a':'c')), rand(rng, UInt8)) for _ in 1:5000],
+                  [rand(rng, 1:5) => randstr(2) for _ in 1:10_000],
+                  [rand(rng, ds) => rand(rng, -2.0:1.0:2.0) for _ in 1:10_000])
+        for v in tuples
+            @test all(same(v; rev, nt) for rev in (false, true), nt in (1, 8))
+        end
+        pre = ["", "-alpha", "-alpha.1", "-beta", "-rc.2", "-0"]
+        bld = ["", "+b1", "+b2.3"]
+        vs = [VersionNumber("$(rand(rng, 0:3)).$(rand(rng, 0:3)).$(rand(rng, 0:3))$(rand(rng, pre))$(rand(rng, bld))")
+              for _ in 1:20_000]
+        @test all(same(vs; rev, nt) for rev in (false, true), nt in (1, 8))
     end
 
     @testset "fallback" begin

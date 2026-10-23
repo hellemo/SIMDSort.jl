@@ -17,6 +17,7 @@ include("sort.jl")
 include("parallel.jl")
 include("perm.jl")
 include("wide.jl")
+include("compound.jl")
 
 """
     simdsort!(v; rev=false, ntasks=1)
