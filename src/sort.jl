@@ -163,6 +163,8 @@ end
 # Key ranges up to this size (and below n/4) are sorted by counting.
 const COUNT_MAXRANGE = 1 << 16
 const COUNT_MINN = 1 << 12
+# Slack around the sample's range for values the sample missed.
+const COUNT_MARGIN = 32
 
 """
     counting_sort!(v, rev, ntasks) -> Bool
@@ -171,6 +173,10 @@ If the integers in `v` span a range of at most `COUNT_MAXRANGE` values and fewer
 than `length(v) ÷ 4`, sort `v` (in reverse if `rev`) by counting each value and
 writing the runs, and return `true`. Otherwise leave `v` unchanged and return
 `false`. Works on the original values, so no key map is needed.
+
+A sample of 1024 keys rejects wide ranges and sets up a count table over the
+sample's range plus a margin. Keys outside it go to an overflow slot; if any do,
+the table is redone over the exact range from a min/max scan.
 """
 function counting_sort!(v::Vector{T}, rev::Bool, ntasks::Int) where {T<:Integer}
     n = length(v)
@@ -183,50 +189,90 @@ function counting_sort!(v::Vector{T}, rev::Bool, ntasks::Int) where {T<:Integer}
         smx = max(smx, v[i])
     end
     Int128(smx) - Int128(smn) > COUNT_MAXRANGE && return false
-    mn, mx = GC.@preserve v vextrema(pointer(v), n)
-    r = Int128(mx) - Int128(mn)
-    (r <= COUNT_MAXRANGE && r < n ÷ 4) || return false
-    r = Int(r)
-    chunks = collect(Iterators.partition(1:n, cld(n, max(1, ntasks))))
-    parts = Vector{Vector{Int}}(undef, length(chunks))
-    if length(chunks) == 1
-        parts[1] = count_keys(v, chunks[1], mn, r)
-    else
-        @sync for (i, c) in enumerate(chunks)
-            Threads.@spawn parts[i] = count_keys(v, c, mn, r)
-        end
+    # Table over [base, base + W), clamped to T's range so that it never wraps.
+    lo = max(Int128(smn) - COUNT_MARGIN, Int128(typemin(T)))
+    hi = min(Int128(smx) + COUNT_MARGIN, Int128(typemax(T)))
+    counts = count_all(v, T(lo), Int(hi - lo + 1), ntasks)
+    if counts[end] != 0
+        # Keys outside the table: count again over the exact range.
+        mn, mx = GC.@preserve v vextrema(pointer(v), n)
+        r = Int128(mx) - Int128(mn)
+        (r <= COUNT_MAXRANGE && r < n ÷ 4) || return false
+        lo = Int128(mn)
+        counts = count_all(v, mn, Int(r + 1), ntasks)
     end
-    counts = reduce(+, parts)
-    fill_runs!(v, counts, mn, rev)
+    pop!(counts)                                # the (empty) overflow slot
+    f = findfirst(!iszero, counts)
+    l = findlast(!iszero, counts)
+    (l - f <= COUNT_MAXRANGE && l - f < n ÷ 4) || return false
+    fill_runs!(v, view(counts, f:l), T(lo + f - 1), rev, ntasks)
     return true
 end
 
-# Counts of the values v[c] .- mn, accumulated in four interleaved tables so that
-# runs of equal keys do not serialize on one counter.
-function count_keys(v::Vector{T}, c::UnitRange{Int}, mn::T, r::Int) where {T}
-    t = zeros(Int, r + 1, 4)
+# Counts per slot of [base, base + W) plus one overflow slot, by up to `ntasks`
+# tasks.
+function count_all(v::Vector{T}, base::T, W::Int, ntasks::Int) where {T}
+    chunks = collect(Iterators.partition(1:length(v), cld(length(v), max(1, ntasks))))
+    length(chunks) == 1 && return count_keys(v, chunks[1], base, W)
+    parts = Vector{Vector{Int}}(undef, length(chunks))
+    @sync for (i, c) in enumerate(chunks)
+        Threads.@spawn parts[i] = count_keys(v, c, base, W)
+    end
+    return reduce(+, parts)
+end
+
+# Four interleaved tables, so that runs of equal keys do not serialize on one
+# counter. The slot is (x - base) mod 2^w, which is below W exactly for the keys in
+# [base, base + W) because that interval does not wrap; the others land in slot W.
+function count_keys(v::Vector{T}, c::UnitRange{Int}, base::T, W::Int) where {T}
+    U = unsigned(T)
+    w = UInt(W)
+    t = zeros(Int, W + 1, 4)
+    slot(x) = min(UInt((x - base) % U), w) + 1
     i = first(c)
     @inbounds while i + 3 <= last(c)
-        t[(v[i] - mn) % Int + 1, 1] += 1
-        t[(v[i+1] - mn) % Int + 1, 2] += 1
-        t[(v[i+2] - mn) % Int + 1, 3] += 1
-        t[(v[i+3] - mn) % Int + 1, 4] += 1
+        t[slot(v[i]), 1] += 1
+        t[slot(v[i+1]), 2] += 1
+        t[slot(v[i+2]), 3] += 1
+        t[slot(v[i+3]), 4] += 1
         i += 4
     end
     @inbounds while i <= last(c)
-        t[(v[i] - mn) % Int + 1, 1] += 1
+        t[slot(v[i]), 1] += 1
         i += 1
     end
     return vec(sum(t; dims=2))
 end
 
-function fill_runs!(v::Vector{T}, counts::Vector{Int}, mn::T, rev::Bool) where {T}
-    j = 1
-    for d in (rev ? reverse(eachindex(counts)) : eachindex(counts))
-        c = counts[d]
-        c == 0 && continue
-        fill!(view(v, j:j+c-1), mn + (d - 1) % T)
-        j += c
+# Write counts[d] copies of first + (d - 1) for each d (descending if `rev`).
+# With several tasks, each fills an equal slice of `v`.
+function fill_runs!(v::Vector{T}, counts::AbstractVector{Int}, first::T, rev::Bool,
+                    ntasks::Int) where {T}
+    m = length(counts)
+    ord = rev ? (m:-1:1) : (1:m)
+    starts = cumsum([1; [counts[d] for d in ord][1:end-1]])
+    function fill_slice(a, b)
+        j = searchsortedlast(starts, a)
+        i = a
+        @inbounds while i <= b
+            d = ord[j]
+            e = min(b, starts[j] + counts[d] - 1)
+            x = first + (d - 1) % T
+            for k in i:e
+                v[k] = x
+            end
+            i = e + 1
+            j += 1
+        end
+    end
+    n = length(v)
+    if ntasks <= 1
+        fill_slice(1, n)
+    else
+        @sync for t in 1:ntasks
+            a, b = div(n * (t - 1), ntasks) + 1, div(n * t, ntasks)
+            a <= b && Threads.@spawn fill_slice(a, b)
+        end
     end
     return v
 end

@@ -132,6 +132,19 @@ end
             @test check(v) && check(v; rev=true)
             @test isequal(simdsort(v; ntasks=3), sort(v))
         end
+        # Rare keys the 1024-key sample misses: inside the margin, outside it (but
+        # in range), far outside (range too wide), and at the ends of T's range.
+        for extra in (T[1005], T[1100, 3000], T[typemax(T)], T[typemin(T), 7])
+            v = rand(rng, T(0):T(1000), n)
+            v[rand(rng, 1:n, length(extra))] = extra
+            for nt in (1, 3, 8)
+                @test isequal(simdsort(v; ntasks=nt), sort(v))
+                @test isequal(simdsort(v; rev=true, ntasks=nt), sort(v; rev=true))
+            end
+        end
+        for v in (rand(rng, [typemax(T) - T(3), typemax(T)], n), rand(rng, typemin(T):typemin(T)+T(9), n))
+            @test check(v) && check(v; rev=true)
+        end
         # Few distinct values spread over the whole range, and one dominant value.
         for v in (rand(rng, rand(rng, T, 1000), 10^6), rand(rng, rand(rng, T, 3), 10^5),
                   [rand(rng) < 0.7 ? T(42) : rand(rng, T) for _ in 1:10^6])
