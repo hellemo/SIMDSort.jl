@@ -131,12 +131,15 @@ otherwise `partition(p, n, pivot)` makes a two-way split and `a == b`.
 end
 
 """
-    qsort!(p, n, buf, depth, s) -> s
+    qsort!(p, n, buf, depth, s, lo=typemin(T), hi=typemax(T)) -> s
 
-Sort `n` keys at `p`. `buf` holds `basecase_max(T)` keys; past `depth` levels the
-range is handed to `Base.sort!`.
+Sort `n` keys at `p`, all in `[lo, hi]`. `buf` holds `basecase_max(T)` keys;
+past `depth` levels the range is handed to `Base.sort!`. The bounds narrow with
+every partition and let 64-bit integer base cases use double min/max
+(`leaf_sort!`).
 """
-function qsort!(p::Ptr{T}, n::Int, buf::Ptr{T}, depth::Int, s::UInt64) where {T}
+function qsort!(p::Ptr{T}, n::Int, buf::Ptr{T}, depth::Int, s::UInt64,
+                lo::T=typemin(T), hi::T=typemax(T)) where {T}
     while n > basecase_max(T)
         if depth == 0
             sort!(unsafe_wrap(Array, p, n))
@@ -153,20 +156,83 @@ function qsort!(p::Ptr{T}, n::Int, buf::Ptr{T}, depth::Int, s::UInt64) where {T}
             m = partition_auto!(p, n, mn, buf)
             p += m * sizeof(T)
             n -= m
+            lo, hi = mn, mx
             continue
         end
-        # Recurse on the smaller side, loop on the larger one.
+        # Recurse on the smaller side, loop on the larger one. Keys left of b
+        # are ≤ pivot, keys from b on are ≥ pivot.
         if a <= n - b
-            s = qsort!(p, a, buf, depth, s)
+            s = qsort!(p, a, buf, depth, s, lo, pivot)
             p += b * sizeof(T)
             n -= b
+            lo = pivot
         else
-            s = qsort!(p + b * sizeof(T), n - b, buf, depth, s)
+            s = qsort!(p + b * sizeof(T), n - b, buf, depth, s, pivot, hi)
             n = a
+            hi = pivot
         end
     end
-    small_sort!(p, n, buf)
+    leaf_sort!(p, n, buf, lo, hi)
     return s
+end
+
+@inline leaf_sort!(p::Ptr{T}, n::Int, buf::Ptr{T}, lo::T, hi::T) where {T} = small_sort!(p, n, buf)
+
+# AVX2 has no 64-bit integer min/max (a compare and two blends), but it has
+# vminpd/vmaxpd. If the keys of a leaf lie within [lo, hi] with hi - lo < 2^62,
+# the offsets x - lo, read as Float64 bit patterns, are finite non-negative
+# doubles in the same order as the integers (subnormals included, unless they are
+# flushed to zero), so the leaf can be sorted with the Float64 networks.
+# Decided when the code is compiled (SIMD.Targets is meant for generated code).
+@generated has_avx() = SIMD.Targets.has_feature(:avx)
+
+@inline function leaf_sort!(p::Ptr{Int64}, n::Int, buf::Ptr{Int64}, lo::Int64, hi::Int64)
+    if n > 8 && (hi - lo) % UInt64 < UInt64(1) << 62 && has_avx() && !get_zero_subnormals()
+        small_sort_offsets!(p, n, buf, lo)
+    else
+        small_sort!(p, n, buf)
+    end
+    return nothing
+end
+
+@inline function small_sort_offsets!(p::Ptr{Int64}, n::Int, buf::Ptr{Int64}, lo::Int64)
+    N = lanes(Int64)
+    R = MAXROWS
+    if n <= N * N
+        netsort_offsets!(p, n, buf, lo, Val(N))
+    elseif n <= 2N * N
+        netsort_offsets!(p, n, buf, lo, Val(2N))
+    elseif n <= 4N * N && 4N <= R
+        netsort_offsets!(p, n, buf, lo, Val(4N))
+    else
+        netsort_offsets!(p, n, buf, lo, Val(R))
+    end
+    return nothing
+end
+
+@inline function netsort_offsets!(p::Ptr{Int64}, n::Int, buf::Ptr{Int64}, lo::Int64,
+                                  ::Val{R}) where {R}
+    N = lanes(Int64)
+    unsafe_copyto!(buf, p, n)
+    # Padding: lo + (bits of +Inf), so that its offset is +Inf.
+    pad = lo + reinterpret(Int64, Inf)
+    for i in n+1:R*N
+        unsafe_store!(buf, pad, i)
+    end
+    lv = Vec{N,Int64}(lo)
+    vs = ntuple(r -> reinterpret(Vec{N,Float64}, vload(Vec{N,Int64}, buf + (r - 1) * N * 8) - lv), Val(R))
+    vs = sortnet(vs)
+    nfull = n ÷ N
+    for r in 1:R
+        x = reinterpret(Vec{N,Int64}, vs[r]) + lv
+        if r <= nfull
+            vstore(x, p + (r - 1) * N * 8)
+        elseif r == nfull + 1
+            vstore(x, buf)
+        end
+    end
+    unsafe_copyto!(p + nfull * N * 8, buf, n - nfull * N)
+    return nothing
 end
 
 function sort_keys!(p::Ptr{T}, n::Int, ntasks::Int=1) where {T}

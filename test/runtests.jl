@@ -171,6 +171,21 @@ end
         end
     end
 
+    @testset "Int64 leaves as doubles, also with subnormals flushed" begin
+        # Small key ranges give offsets that are subnormal as doubles.
+        for v in (rand(rng, Int64(-50):Int64(50), 10^5), rand(rng, Int64, 10^5),
+                  rand(rng, UInt64(0):UInt64(2)^61, 10^5), rand(rng, [typemin(Int64), typemax(Int64), 0], 10^4))
+            @test check(v) && check(v; rev=true)
+            old = get_zero_subnormals()
+            try
+                set_zero_subnormals(true)
+                @test simdsort(v) == sort(v)
+            finally
+                set_zero_subnormals(old)
+            end
+        end
+    end
+
     @testset "depth limit" begin
         # A zero depth budget sends every range to the fallback.
         v = rand(rng, Int32, 10^4)
