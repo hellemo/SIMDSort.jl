@@ -8,13 +8,14 @@ module SIMDQuickSort
 
 using SIMD
 
-export simdsort!, simdsort
+export simdsort!, simdsort, simdsortperm
 
 include("keys.jl")
 include("network.jl")
 include("partition.jl")
 include("sort.jl")
 include("parallel.jl")
+include("perm.jl")
 
 """
     simdsort!(v; rev=false, ntasks=1)

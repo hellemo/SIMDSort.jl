@@ -182,6 +182,37 @@ end
         @test v == sort(w)
     end
 
+    @testset "simdsortperm $T" for T in TYPES
+        for dist in DISTS, rev in (false, true)
+            @test all(n -> (v = gen(T, dist, n, rng); simdsortperm(v; rev) == sortperm(v; rev)), 0:300)
+            for n in (1000, 10^5), nt in (1, 8)
+                v = gen(T, dist, n, rng)
+                @test simdsortperm(v; rev, ntasks=nt) == sortperm(v; rev)
+            end
+        end
+    end
+
+    @testset "strings and symbols" begin
+        randstr(n) = String(rand(rng, UInt8[0x30:0x39; 0x41:0x5a; 0x61:0x7a], n))
+        tricky = ["a", "a\0", "a\0\0", "", "\0", "ab", "a\xff", "\xff", "é", "e", "a"^30, "a"^30 * "b"]
+        inputs = [[randstr(rand(rng, 0:20)) for _ in 1:10^5],
+                  rand(rng, ["id" * lpad(string(i), 10, "0") for i in 1:1000], 10^5),
+                  rand(rng, tricky, 10^4),
+                  [randstr(40) * "x" for _ in 1:5000],
+                  [randstr(rand(rng, 0:3)) for _ in 1:2000]]
+        for v in inputs, rev in (false, true), nt in (1, 8)
+            @test simdsortperm(v; rev, ntasks=nt) == sortperm(v; rev)
+            @test isequal(simdsort(v; rev, ntasks=nt), sort(v; rev))
+            sy = Symbol.(filter(s -> !occursin('\0', s) && isvalid(s), v))
+            @test simdsortperm(sy; rev, ntasks=nt) == sortperm(sy; rev)
+            @test isequal(simdsort(sy; rev, ntasks=nt), sort(sy; rev))
+        end
+        for n in 0:100
+            v = rand(rng, tricky, n)
+            @test simdsortperm(v) == sortperm(v) && isequal(simdsort(v; rev=true), sort(v; rev=true))
+        end
+    end
+
     @testset "fallback" begin
         v = rand(rng, Int16, 1000)
         @test simdsort(v) == sort(v)
