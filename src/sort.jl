@@ -185,9 +185,13 @@ end
 # flushed to zero), so the leaf can be sorted with the Float64 networks.
 # Decided when the code is compiled (SIMD.Targets is meant for generated code).
 @generated has_avx() = SIMD.Targets.has_feature(:avx)
+# AVX-512 (F + VL) has native 64-bit integer min/max (vpminsq/vpmaxsq), so the
+# double-domain detour for Int64 leaves is not needed there.
+@generated has_avx512() = SIMD.Targets.has_feature(:avx512f) && SIMD.Targets.has_feature(:avx512vl)
 
 @inline function leaf_sort!(p::Ptr{Int64}, n::Int, buf::Ptr{Int64}, lo::Int64, hi::Int64)
-    if n > 8 && (hi - lo) % UInt64 < UInt64(1) << 62 && has_avx() && !get_zero_subnormals()
+    if n > 8 && (hi - lo) % UInt64 < UInt64(1) << 62 && has_avx() && !has_avx512() &&
+            !get_zero_subnormals()
         small_sort_offsets!(p, n, buf, lo)
     else
         small_sort!(p, n, buf)

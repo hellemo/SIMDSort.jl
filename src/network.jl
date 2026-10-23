@@ -352,7 +352,11 @@ register by register. `R` must be a power-of-two multiple of `N`.
 @generated function sortnet(vs::NTuple{R,Vec{N,T}}) where {R,N,T}
     # 64-bit integers keep the single network: their min/max (compare and two
     # blends) make the split version slower (11-16% in the base case).
-    split = R > 16 && R ÷ 2 >= N && !(T <: Integer && sizeof(T) == 8)
+    # Split only where the target has 16 vector registers (AVX2); AVX-512 has 32.
+    # 64-bit integers keep the single network on AVX2 (their min/max is a
+    # compare and two blends there).
+    split = R > 16 && R ÷ 2 >= N && !(T <: Integer && sizeof(T) == 8) &&
+            !SIMD.Targets.has_feature(:avx512f)
     # The 16-row (and smaller) networks use zigzag merges; the 32-row ones are
     # two zigzag halves joined by halves_body.
     body = split ? halves_body(R, N) :
