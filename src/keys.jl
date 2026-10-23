@@ -41,6 +41,13 @@ function unmap_keys!(k::AbstractVector{S}, ::Type{T}, rev::Bool) where {S, T}
     return k
 end
 
+function complement!(k::AbstractVector{<:Unsigned})
+    @inbounds @simd for i in eachindex(k)
+        k[i] = ~k[i]
+    end
+    return k
+end
+
 function negate!(k::AbstractVector{<:AbstractFloat})
     @inbounds @simd for i in eachindex(k)
         k[i] = -k[i]

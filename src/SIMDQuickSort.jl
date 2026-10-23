@@ -45,6 +45,20 @@ function simdsort!(v::Vector{T}; rev::Bool=false, ntasks::Integer=1) where {T<:S
     return v
 end
 
+# UInt32 keys are sorted as they are: AVX2 has unsigned 32-bit min/max, so the
+# kernels need no key map. `rev` complements the values (an exact involution that
+# reverses the unsigned order). UInt64 keeps the map: without unsigned 64-bit
+# min/max, native kernels cost as much as the two map passes save.
+function simdsort!(v::Vector{UInt32}; rev::Bool=false, ntasks::Integer=1)
+    n = length(v)
+    n <= 1 && return v
+    counting_sort!(v, rev, Int(ntasks)) && return v
+    rev && foreach_chunk(complement!, v, ntasks)
+    GC.@preserve v (presorted!(v) || sort_keys!(pointer(v), n, Int(ntasks)))
+    rev && foreach_chunk(complement!, v, ntasks)
+    return v
+end
+
 # Floats are sorted as floats: NaNs are moved out first, `rev` negates the values
 # (an exact involution), and since compares treat -0.0 == 0.0, the run of zeros
 # is rewritten in `isless` order afterwards from a count of the -0.0s.
