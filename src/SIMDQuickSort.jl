@@ -12,6 +12,7 @@ export simdsort!, simdsort
 
 include("keys.jl")
 include("network.jl")
+include("partition.jl")
 include("sort.jl")
 
 """
