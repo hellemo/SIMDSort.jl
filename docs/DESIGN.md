@@ -545,6 +545,22 @@ gives radix time / quicksort time; below 1, the radix sort is faster.
   be specific to this machine's memory bandwidth per core. It is not
   implemented. Measurements on a server or AVX-512 node would be needed first.
 
+### i. Final round: base case and few distinct values
+
+The base case was the remaining lever for `Float64` (§7.g). All comparisons were
+interleaved, with fresh inputs:
+
+| change | effect (2^26 keys, 1 thread unless noted) |
+|---|---|
+| 32-row networks split into two halves (§5) | spill moves 946 → 202 (Float64 network); Float64 −5 to −9% (median) |
+| networks inlined (no vectors passed through memory) | Float64 −4 to −5.5%; Int32 best 0.29 → 0.27 s |
+| zigzag merges after F5 (§5) | 16-row Float64 network 565 → 445 instructions; Float32/UInt32 −3 to −10%, Float64 best ≈ 0.56 s |
+| hash counting after CAFS (§1) | 1000 random UInt64 values 0.275 → 0.126 s; 8 threads 0.139 → 0.036 s |
+| leaf-size-pruned networks (variants per register count) | rejected: −6 to −13% per isolated leaf, but +0.2 to +3.3% in full sorts (dispatch, code size) |
+
+Final: `Float64` 0.542 s, against x86-simd-sort's 0.579 s; SIMDQuickSort is the
+fastest one-thread sort for every numeric type measured (README).
+
 ## 8. Other key types: windowed keys
 
 Everything that is not a plain 32/64-bit number goes through one mechanism

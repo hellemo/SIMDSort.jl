@@ -9,6 +9,13 @@ using AlgebraOfGraphics, CairoMakie, CSV, DataFrames, Printf
 
 const RESULTS = joinpath(@__DIR__, "results")
 const OUT = joinpath(@__DIR__, "..", "docs")
+# PLOTS_PNG=<dir>: also write PNG previews there.
+const PNG = get(ENV, "PLOTS_PNG", "")
+
+function savefig(name, fig)
+    save(joinpath(OUT, name * ".svg"), fig)
+    isempty(PNG) || save(joinpath(PNG, name * ".png"), fig; px_per_unit = 1.5)
+end
 
 const SURFACE = colorant"#fcfcfb"
 const INK = colorant"#0b0b0b"
@@ -32,7 +39,7 @@ const AXIS = (; backgroundcolor = SURFACE, xgridcolor = GRID, ygridcolor = GRID,
               ylabelcolor = INK, titlecolor = INK, titlealign = :left,
               titlesize = 17, subtitlecolor = INK2)
 const LEGEND = (; position = :bottom, framevisible = false, labelcolor = INK, tellheight = true)
-const MACHINE = "Intel Core Ultra 7 268V (4P + 4E, AVX2), Julia 1.13"
+const MACHINE = "Core Ultra 7 268V (AVX2), Julia 1.13"
 
 # Throughput by key type for a set of (method, threads) series.
 function throughput_plot(df, cases, series, title, subtitle; size = (760, 560))
@@ -43,7 +50,7 @@ function throughput_plot(df, cases, series, title, subtitle; size = (760, 560))
     labels = first.(series)
     colors = [color_of(m) for (_, (m, _)) in series]
     plt = data(d) *
-          mapping(:case => sorter(cases...) => "", :melems => "Throughput (M keys/s)";
+          mapping(:case => sorter(reverse(cases)...) => "", :melems => "Throughput (M keys/s)";
                   color = :series => sorter(labels...) => "",
                   dodge = :series => sorter(labels...) => "") *
           visual(BarPlot; direction = :x, gap = 0.25, dodge_gap = 0.04,
@@ -66,20 +73,20 @@ function bench_plots()
     one = ["SIMDQuickSort.jl" => ("SIMDQuickSort.jl", 1), "x86-simd-sort" => ("x86-simd-sort", 1),
            "Highway vqsort" => ("Highway vqsort", 1), "ChapelSort.jl (radix)" => ("ChapelSort.jl psort!", 1),
            "Base.sort!" => ("Base.sort!", 1)]
-    save(joinpath(OUT, "random1.svg"),
+    savefig("random1",
          throughput_plot(df, RANDOM, one, "Random keys, one thread",
-                         "Higher is better · best of 9 interleaved rounds, fresh input · $MACHINE"))
+                         "Higher is better · best of 9 rounds · $MACHINE"))
     nt = maximum(df.nthreads)
     many = ["SIMDQuickSort.jl" => ("SIMDQuickSort.jl", nt), "x86-simd-sort" => ("x86-simd-sort", nt),
             "ChapelSort.jl (radix)" => ("ChapelSort.jl psort!", nt)]
-    save(joinpath(OUT, "random$nt.svg"),
+    savefig("random$nt",
          throughput_plot(df, RANDOM, many, "Random keys, $nt threads",
-                         "Higher is better · best of 9 interleaved rounds, fresh input · $MACHINE";
+                         "Higher is better · best of 9 rounds · $MACHINE";
                          size = (760, 500)))
     special = [one; "SIMDQuickSort.jl, $nt thr" => ("SIMDQuickSort.jl", nt)]
-    save(joinpath(OUT, "special.svg"),
+    savefig("special",
          throughput_plot(df, SPECIAL, one, "Duplicates and presorted inputs, one thread",
-                         "Higher is better (log scale would hide nothing here: note the range) · $MACHINE";
+                         "Higher is better · $MACHINE";
                          size = (760, 460)))
 end
 
@@ -112,7 +119,7 @@ function types_plot(op)
                legend = (; LEGEND..., nbanks = 2),
                figure = (; size = (780, 60 + 52 * length(cases)), backgroundcolor = SURFACE,
                          fontsize = 13))
-    save(joinpath(OUT, "types_$op.svg"), fig)
+    savefig("types_$op", fig)
 end
 
 # Radix (ChapelSort) / quicksort (SIMDQuickSort) time by size and tasks.
@@ -132,13 +139,13 @@ function crossover_plot()
           (visual(Lines; linewidth = 2) + visual(Scatter; markersize = 8))
     ref = mapping([1.0]) * visual(HLines; color = INK2, linestyle = :dash, linewidth = 1)
     fig = draw(plt + ref, scales(Color = (; palette = [GRAY, AQUA, ORANGE, BLUE][1:length(tasks)]));
-               axis = (; AXIS..., titlesize = 13, yscale = log2, yticks = [0.5, 1, 2, 4],
-                       limits = (nothing, nothing, 0.6, 6)),
+               axis = (; AXIS..., titlesize = 13, yscale = log2, yticks = [0.5, 1, 2, 4, 8],
+                       limits = (nothing, nothing, 0.5, 12)),
                legend = (; LEGEND..., nbanks = 1, orientation = :horizontal),
                figure = (; size = (860, 560), backgroundcolor = SURFACE, fontsize = 12,
                          title = "When does ChapelSort's radix sort beat the quicksort?",
                          subtitle = "Below the dashed line the radix sort is faster · $MACHINE"))
-    save(joinpath(OUT, "crossover.svg"), fig)
+    savefig("crossover", fig)
 end
 
 function main()

@@ -27,6 +27,25 @@ const CASES = [
     ("Int32", Int32, rng -> x -> rand!(rng, x)),
 ]
 
+
+# BENCH_ONLY=<substring>: run only the cases whose name contains it and replace
+# just their rows in the existing CSV.
+const ONLY = get(ENV, "BENCH_ONLY", "")
+selected(name) = isempty(ONLY) || occursin(ONLY, name)
+function write_rows(out, header, rows, names)
+    keep = String[]
+    if !isempty(ONLY) && isfile(out)
+        for l in readlines(out)[2:end]
+            any(nm -> startswith(l, "\"" * nm * "\""), names) || push!(keep, l)
+        end
+    end
+    open(out, "w") do io
+        println(io, header)
+        foreach(l -> println(io, l), keep)
+        foreach(l -> println(io, l), rows)
+    end
+end
+
 const ROWS = NamedTuple{(:case, :method, :ntasks, :n, :best, :median),
                         Tuple{String,String,Int,Int,Float64,Float64}}[]
 
@@ -61,6 +80,7 @@ end
 function main()
     println("Julia $VERSION, $NT threads, best of $ROUNDS interleaved rounds, fresh input per round")
     for (name, T, mkgen) in CASES
+        selected(name) || continue
         println("\n$name: radix / quicksort, best times (< 1: radix faster)")
         println("  n     ", join([@sprintf("%8s", "$t thr") for t in TASKS]))
         for k in LOGS
@@ -71,12 +91,9 @@ function main()
     end
     out = joinpath(@__DIR__, "results", "crossover.csv")
     mkpath(dirname(out))
-    open(out, "w") do io
-        println(io, "case,method,ntasks,n,best,median")
-        for r in ROWS
-            println(io, "\"", r.case, "\",", r.method, ",", r.ntasks, ",", r.n, ",", r.best, ",", r.median)
-        end
-    end
+    write_rows(out, "case,method,ntasks,n,best,median",
+               [string("\"", r.case, "\",", r.method, ",", r.ntasks, ",", r.n, ",", r.best, ",", r.median)
+                for r in ROWS], unique(r.case for r in ROWS))
     println("\nwrote ", out)
 end
 

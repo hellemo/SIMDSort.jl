@@ -52,11 +52,31 @@ const METHODS = [
     ("Highway vqsort", 1, vqsort!),
 ]
 
+
+# BENCH_ONLY=<substring>: run only the cases whose name contains it and replace
+# just their rows in the existing CSV.
+const ONLY = get(ENV, "BENCH_ONLY", "")
+selected(name) = isempty(ONLY) || occursin(ONLY, name)
+function write_rows(out, header, rows, names)
+    keep = String[]
+    if !isempty(ONLY) && isfile(out)
+        for l in readlines(out)[2:end]
+            any(nm -> startswith(l, "\"" * nm * "\""), names) || push!(keep, l)
+        end
+    end
+    open(out, "w") do io
+        println(io, header)
+        foreach(l -> println(io, l), keep)
+        foreach(l -> println(io, l), rows)
+    end
+end
+
 const ROWS = NamedTuple{(:case, :method, :nthreads, :n, :best, :median),
                         Tuple{String,String,Int,Int,Float64,Float64}}[]
 
 # `gen(rng)` returns a fresh input.
 function case(name, gen)
+    selected(name) || return
     rng = Xoshiro(hash(name))
     x = gen(rng)
     ref = sort(x)
@@ -116,13 +136,9 @@ function main()
     case("Int32, 2^20", rng -> rand(rng, Int32, 2^20))
     out = joinpath(@__DIR__, "results", "bench.csv")
     mkpath(dirname(out))
-    open(out, "w") do io
-        println(io, "case,method,nthreads,n,best,median")
-        for r in ROWS
-            println(io, "\"", r.case, "\",\"", r.method, "\",", r.nthreads, ",", r.n, ",",
-                    r.best, ",", r.median)
-        end
-    end
+    write_rows(out, "case,method,nthreads,n,best,median",
+               [string("\"", r.case, "\",\"", r.method, "\",", r.nthreads, ",", r.n, ",", r.best, ",", r.median)
+                for r in ROWS], unique(r.case for r in ROWS))
     println("wrote ", out)
     markdown(stdout)
 end
