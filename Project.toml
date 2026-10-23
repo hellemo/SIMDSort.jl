@@ -8,7 +8,7 @@ license = "MIT"
 SIMD = "fdea26ae-647d-5447-a871-4b548cad5224"
 
 [sources]
-SIMD = {path = "../SIMD.jl"}
+SIMD = {url = "https://github.com/hellemo/SIMD.jl", rev = "permute-compress"}
 
 [compat]
 SIMD = "3.8"

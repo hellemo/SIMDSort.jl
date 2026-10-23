@@ -6,10 +6,12 @@
 > of `hellemo/SIMD.jl`. It adds `vpartition`, `vpermute` and a faster `vstorec`.
 > The registered SIMD.jl does not have these functions, so the package does not
 > work with it.
-> - On Julia 1.11 and later, `Project.toml` points to the fork through
->   `[sources]`. In this repository that is a local path (`../SIMD.jl`), so the
->   fork has to be checked out next to it.
-> - On Julia 1.10, `Pkg.develop` both packages.
+> - On Julia 1.11 and later, `Project.toml` takes the fork from GitHub through
+>   `[sources]` (`url = "https://github.com/hellemo/SIMD.jl"`,
+>   `rev = "permute-compress"`); `Pkg.instantiate()` fetches it.
+> - `[sources]` only applies to the active project. When SIMDQuickSort.jl is
+>   added to another environment, or on Julia 1.10, add the fork there first:
+>   `Pkg.add(url = "https://github.com/hellemo/SIMD.jl", rev = "permute-compress")`.
 >
 > This will stay so until the changes are merged into SIMD.jl and released.
 
@@ -120,8 +122,7 @@ ideas that were rejected. `bench/profile.jl` reproduces the breakdown.
   `sortperm`, `by` or `lt`.
 - The sort is not stable. This only matters for distinguishable equal keys, such
   as NaNs with different payloads.
-- Depends on the unreleased SIMD.jl fork (through `[sources]`, which needs Julia
-  1.11+; on 1.10, `Pkg.develop` both packages).
+- Depends on the unreleased SIMD.jl fork (see the warning at the top).
 
 ## Tests
 
