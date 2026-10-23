@@ -28,13 +28,16 @@ function gen(::Type{T}, dist::Symbol, n::Int, rng) where {T}
         T <: AbstractFloat || return gen(T, :extremes, n, rng)
         rand(rng, T[NaN, -NaN, Inf, -Inf, 0.0, -0.0, 1.0, -1.0, floatmin(T),
                     -floatmin(T), nextfloat(T(0)), floatmax(T)], n)
+    elseif dist === :zeros
+        T <: AbstractFloat || return gen(T, :two, n, rng)
+        rand(rng, T[0.0, -0.0, 0.0, -0.0, 1.0, -1.0, NaN], n)
     else
         error("unknown distribution $dist")
     end
 end
 
 const DISTS = (:uniform, :sorted, :reversed, :equal, :two, :few, :sawtooth,
-               :organpipe, :extremes, :special)
+               :organpipe, :extremes, :special, :zeros)
 
 function check(v; rev=false)
     expected = sort(v; rev)
@@ -102,7 +105,7 @@ end
     end
 
     @testset "ntasks $T" for T in TYPES
-        for dist in (:uniform, :few, :equal, :sorted, :special), rev in (false, true)
+        for dist in (:uniform, :few, :equal, :sorted, :special, :zeros), rev in (false, true)
             v = gen(T, dist, 3 * 10^6 + 17, rng)
             @test isequal(simdsort(v; rev, ntasks=8), sort(v; rev))
         end

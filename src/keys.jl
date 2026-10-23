@@ -41,6 +41,39 @@ function unmap_keys!(k::AbstractVector{S}, ::Type{T}, rev::Bool) where {S, T}
     return k
 end
 
+function negate!(k::AbstractVector{<:AbstractFloat})
+    @inbounds @simd for i in eachindex(k)
+        k[i] = -k[i]
+    end
+    return k
+end
+
+# Number of -0.0s in `k` (bit-exact compare, vectorizes).
+function count_negzeros(k::AbstractVector{T}) where {T<:AbstractFloat}
+    U = signedkey(T)
+    nz = reinterpret(U, -zero(T))
+    c = 0
+    @inbounds @simd for i in eachindex(k)
+        c += reinterpret(U, k[i]) == nz
+    end
+    return c
+end
+
+"""
+    order_zeros!(k, c)
+
+`k` is sorted except that `-0.0` and `0.0` compare equal; also, vector min/max
+may have changed the sign of zeros. Rewrite the run of zeros as the `c` -0.0s of
+the input followed by 0.0s, as `isless` orders them.
+"""
+function order_zeros!(k::AbstractVector{T}, c::Int) where {T<:AbstractFloat}
+    lo = searchsortedfirst(k, zero(T); lt=<)
+    hi = searchsortedlast(k, zero(T); lt=<)
+    fill!(view(k, lo:lo+c-1), -zero(T))
+    fill!(view(k, lo+c:hi), zero(T))
+    return k
+end
+
 # Apply `f!` to `ntasks` contiguous chunks of `k` concurrently.
 function foreach_chunk(f!::F, k::AbstractVector, ntasks::Integer) where {F}
     n = length(k)

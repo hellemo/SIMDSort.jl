@@ -9,7 +9,7 @@ const UNROLL = 8
     return s
 end
 
-@inline med3(a, b, c) = max(min(a, b), min(max(a, b), c))
+@inline med3(a, b, c) = vmax(vmin(a, b), vmin(vmax(a, b), c))
 
 @inline function sample(p::Ptr{T}, n::Int, s::UInt64) where {T}
     N = lanes(T)

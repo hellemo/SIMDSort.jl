@@ -26,6 +26,36 @@ end
 
 _v(i) = Symbol(:v, i)
 
+# Vector min/max for the networks. Inputs never contain NaNs (they are moved out
+# first), so for 256-bit float vectors the plain x86 vminps/vminpd (vmaxps/vmaxpd)
+# suffice. Base `min` adds NaN handling, and LLVM does the same for a
+# compare-and-select. Other vectors and targets use `min`/`max`. The x86 forms may
+# change the sign of equal zeros; `order_zeros!` repairs that.
+@inline vmin(a::Vec, b::Vec) = min(a, b)
+@inline vmax(a::Vec, b::Vec) = max(a, b)
+for (T, N, sfx, llt) in ((Float32, 8, "ps", "float"), (Float64, 4, "pd", "double"))
+    for (f, op) in ((:vmin, "min"), (:vmax, "max"))
+        intr = "llvm.x86.avx.$op.$sfx.256"
+        ir = ("""
+            declare <$N x $llt> @$intr(<$N x $llt>, <$N x $llt>)
+            define <$N x $llt> @entry(<$N x $llt> %a, <$N x $llt> %b) #0 {
+              %r = call <$N x $llt> @$intr(<$N x $llt> %a, <$N x $llt> %b)
+              ret <$N x $llt> %r
+            }
+            attributes #0 = { alwaysinline }
+            """, "entry")
+        @eval @generated function $f(a::Vec{$N,$T}, b::Vec{$N,$T})
+            if SIMD.Targets.has_feature(:avx)
+                return :(Vec(Base.llvmcall($$ir, SIMD.LVec{$$N,$$T},
+                                           Tuple{SIMD.LVec{$$N,$$T}, SIMD.LVec{$$N,$$T}},
+                                           a.data, b.data)))
+            else
+                return :($$(op == "min" ? :min : :max)(a, b))
+            end
+        end
+    end
+end
+
 # Constant one- and two-input shuffles; lane indices are 0-based.
 _shuf(x, perm) = :(shufflevector($x, Val($(Tuple(perm)))))
 _shuf(x, y, perm) = :(shufflevector($x, $y, Val($(Tuple(perm)))))
@@ -38,7 +68,7 @@ function network_body(R::Int, N::Int)
 
     # 1. Sort the columns: each compare-exchange is one min and one max.
     for (a, b) in batcher_pairs(R)
-        push!(ex, :(($(_v(a)), $(_v(b))) = (min($(_v(a)), $(_v(b))), max($(_v(a)), $(_v(b))))))
+        push!(ex, :(($(_v(a)), $(_v(b))) = (vmin($(_v(a)), $(_v(b))), vmax($(_v(a)), $(_v(b))))))
     end
 
     # 2. Bitonic merges of sorted runs of length s in column-major numbering
@@ -52,8 +82,8 @@ function network_body(R::Int, N::Int)
             a, b = _v(ρ), _v(R - 1 - ρ)
             push!(ex, quote
                 w = $(_shuf(b, perm))
-                lo = min($a, w)
-                hi = max($a, w)
+                lo = vmin($a, w)
+                hi = vmax($a, w)
                 $a = $(_blend(:lo, :hi, lower, N))
                 $b = $(_shuf(_blend(:hi, :lo, lower, N), perm))
             end)
@@ -67,14 +97,14 @@ function network_body(R::Int, N::Int)
                     a = _v(ρ)
                     push!(ex, quote
                         w = $(_shuf(a, perm))
-                        $a = $(_blend(:(min($a, w)), :(max($a, w)), c -> c & m == 0, N))
+                        $a = $(_blend(:(vmin($a, w)), :(vmax($a, w)), c -> c & m == 0, N))
                     end)
                 end
             else
                 for ρ in 0:R-1
                     ρ & d == 0 || continue
                     a, b = _v(ρ), _v(ρ + d)
-                    push!(ex, :(($a, $b) = (min($a, $b), max($a, $b))))
+                    push!(ex, :(($a, $b) = (vmin($a, $b), vmax($a, $b))))
                 end
             end
             d ÷= 2

@@ -31,16 +31,34 @@ function simdsort!(v::AbstractVector; rev::Bool=false, ntasks::Integer=1)
 end
 
 function simdsort!(v::Vector{T}; rev::Bool=false, ntasks::Integer=1) where {T<:SortTypes}
-    r = T <: AbstractFloat ? nan_partition!(v, rev) : eachindex(v)
-    n = length(r)
+    n = length(v)
     n <= 1 && return v
     S = signedkey(T)
     GC.@preserve v begin
-        p = Ptr{S}(pointer(v, first(r)))
+        p = Ptr{S}(pointer(v))
         k = unsafe_wrap(Array, p, n)
         foreach_chunk(k -> map_keys!(k, T, rev), k, ntasks)
         presorted!(k) || sort_keys!(p, n, Int(ntasks))
         foreach_chunk(k -> unmap_keys!(k, T, rev), k, ntasks)
+    end
+    return v
+end
+
+# Floats are sorted as floats: NaNs are moved out first, `rev` negates the values
+# (an exact involution), and since compares treat -0.0 == 0.0, the run of zeros
+# is rewritten in `isless` order afterwards from a count of the -0.0s.
+function simdsort!(v::Vector{T}; rev::Bool=false, ntasks::Integer=1) where {T<:Union{Float32,Float64}}
+    r = nan_partition!(v, rev)
+    n = length(r)
+    n <= 1 && return v
+    GC.@preserve v begin
+        p = pointer(v, first(r))
+        k = unsafe_wrap(Array, p, n)
+        rev && foreach_chunk(negate!, k, ntasks)
+        c = count_negzeros(k)
+        presorted!(k) || sort_keys!(p, n, Int(ntasks))
+        order_zeros!(k, c)
+        rev && foreach_chunk(negate!, k, ntasks)
     end
     return v
 end
