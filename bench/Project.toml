@@ -1,5 +1,7 @@
 [deps]
+BitIntegers = "c3b6d118-76ef-56ca-8cc7-ebb389d030a1"
 ChapelSort = "b557a38e-b6f0-494b-a80d-8b33d309e162"
+DoubleFloats = "497a8b3b-efae-58df-a0af-a86822472b78"
 Libdl = "8f399da3-3557-5675-b5ff-fb832c97cbdb"
 Printf = "de0858da-6303-5e67-8744-51eddeeeb8d7"
 Profile = "9abbd945-dff8-562f-b5e8-e1ebf5ef1b79"
