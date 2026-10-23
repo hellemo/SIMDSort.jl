@@ -176,6 +176,9 @@ sort.
 
 ## 6. Deviations and choices not taken from the papers
 
+- Before sorting, a scan that stops at the first key out of order detects sorted
+  input, and non-increasing input, which is then reversed.
+
 - Keys are mapped to signed integers once per sort (§1), instead of per-type
   compare traits.
 - The partition step uses `vpartition` followed by two full-width stores, instead of
