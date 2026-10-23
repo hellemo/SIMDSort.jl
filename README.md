@@ -24,15 +24,20 @@ x86-simd-sort. [docs/DESIGN.md](docs/DESIGN.md) describes each part, with
 citations, the measurements behind the parameter choices, and where the
 implementation deviates from the papers.
 
-- **Keys** are mapped in place to signed integers, so one signed vector compare
-  implements `isless` for every type (AVX2 has no unsigned compares). The map is
-  undone after sorting.
+- **Keys:**
+  - integers are mapped in place to signed integers (AVX2 has no unsigned
+    compares), and the map is undone after sorting;
+  - floats are sorted natively, with NaNs moved out first and signed zeros
+    restored by count afterwards;
+  - small integer ranges are counted instead of sorted.
 - **Partition:** in place and bidirectional (Bramas 2017; Wassenberg et al. 2022).
   Each vector is split with `vpartition`, which is a table lookup plus `vpermd` on
-  AVX2, and written with two full-width stores. In cache this costs 0.10–0.12 ns
-  per 32-bit key.
-- **Pivot:** median of lane-wise medians of nine randomly placed vectors. Ranges of
-  equal keys are detected by a vector min/max scan.
+  AVX2, and written with two full-width stores. In cache this costs about 0.11 ns
+  per 32-bit key. Ranges larger than the L2 cache use software prefetch.
+- **Pivot:** median of lane-wise medians of nine randomly placed vectors.
+  - When the sample shows many copies of the pivot, the block of equal keys is
+    split off.
+  - Ranges of equal keys are detected by a vector min/max scan.
 - **Base case:** a vectorized sorting network for up to 256 32-bit or 128 64-bit
   keys: Batcher's network sorts the columns, then bitonic merges without
   transposes, and one final transpose.
@@ -50,31 +55,38 @@ x86-simd-sort and vqsort are called through the C shim in ChapelSort.jl's
 
 | case | Base.sort! (1 thr) | ChapelSort.jl psort! (1 thr) | ChapelSort.jl psort! (8 thr) | SIMDQuickSort.jl (1 thr) | SIMDQuickSort.jl (8 thr) | x86-simd-sort (1 thr) | x86-simd-sort (8 thr) | Highway vqsort (1 thr) |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| UInt64, 2^27 | 3.167 | 1.667 | **0.489** | 1.957 | 0.719 | 2.251 | 0.693 | 1.898 |
-| Int64, 2^26 | 1.601 | 0.913 | **0.268** | 0.846 | 0.282 | 0.941 | 0.347 | 0.868 |
-| Float64 (randn), 2^26 | 1.678 | 1.190 | 0.284 | 0.920 | 0.345 | 0.655 | **0.201** | 0.886 |
-| UInt32, 2^26 | 0.538 | 0.502 | 0.126 | 0.407 | 0.162 | 0.353 | **0.110** | 0.346 |
-| Int32, 2^26 | 0.536 | 0.535 | 0.112 | 0.373 | 0.124 | 0.357 | **0.102** | 0.339 |
-| Float32 (randn), 2^26 | 0.769 | 0.588 | 0.135 | 0.419 | 0.162 | 0.371 | **0.116** | 0.374 |
-| UInt64 in 0:1000, 2^26 | 0.087 | 0.089 | **0.031** | 0.451 | 0.181 | 0.376 | 0.152 | 0.311 |
-| UInt64 sorted, 2^26 | 0.033 | 0.034 | **0.010** | 0.082 | 0.056 | 1.087 | 0.321 | 0.835 |
-| UInt64 reversed, 2^26 | 0.060 | 0.059 | **0.021** | 0.106 | 0.083 | 1.158 | 0.301 | 0.827 |
-| Int32, 2^20 | 0.006 | 0.008 | 0.002 | 0.004 | **0.002** | 0.004 | 0.003 | 0.004 |
+| UInt64, 2^27 | 3.289 | 1.735 | **0.431** | 1.473 | 0.515 | 2.053 | 0.605 | 1.713 |
+| Int64, 2^26 | 1.534 | 0.869 | **0.213** | 0.675 | 0.220 | 0.843 | 0.251 | 0.772 |
+| Float64 (randn), 2^26 | 1.589 | 1.077 | 0.214 | 0.626 | 0.199 | 0.597 | **0.199** | 0.822 |
+| UInt32, 2^26 | 0.553 | 0.546 | 0.146 | 0.362 | 0.129 | 0.328 | **0.116** | 0.320 |
+| Int32, 2^26 | 0.533 | 0.507 | 0.112 | 0.304 | **0.097** | 0.346 | 0.100 | 0.313 |
+| Float32 (randn), 2^26 | 0.771 | 0.548 | 0.122 | 0.359 | **0.102** | 0.348 | 0.119 | 0.345 |
+| UInt64 in 0:1000, 2^26 | 0.081 | 0.084 | **0.029** | 0.107 | 0.083 | 0.374 | 0.148 | 0.284 |
+| UInt64 sorted, 2^26 | 0.029 | 0.031 | **0.012** | 0.088 | 0.052 | 1.051 | 0.313 | 0.799 |
+| UInt64 reversed, 2^26 | 0.059 | 0.058 | **0.022** | 0.102 | 0.079 | 1.030 | 0.301 | 0.769 |
+| UInt64, 1000 random values, 2^26 | 1.707 | 1.039 | 0.183 | 0.324 | 0.167 | 0.356 | **0.148** | 0.293 |
+| Int32, 2^20 | 0.006 | 0.009 | 0.004 | 0.004 | **0.002** | 0.004 | 0.003 | 0.004 |
 
-- **One thread, random keys.**
-  - Faster than Base on every type: 1.4–1.9×.
-  - Faster than ChapelSort's radix sort, except `UInt64` at 2^27.
-  - About level with Highway vqsort for 64-bit integer keys.
-  - 5–12% behind vqsort and x86-simd-sort for 32-bit keys.
-  - x86-simd-sort is clearly faster on `Float64` (0.66 against 0.92 s).
-- **Eight threads.** Scaling is weaker than the C++ sorts and ChapelSort (2.6–3.0×,
-  against 3.2–4.8×). x86-simd-sort wins for 32-bit keys and floats, ChapelSort for
-  64-bit integers. The top-level partitions are memory-bound, and floats pay for
-  two extra passes (key map and unmap).
-- **Few distinct values** (`0:1000`): every quicksort is about 5× slower than the
-  radix sort's counting-sort path.
-- **Sorted and reversed inputs** are caught by a linear pre-check, as in
-  ChapelSort.
+- **One thread, random keys:**
+  - fastest of all measured sorts for `Int32`, `Int64` and `UInt64`;
+  - within 4% of x86-simd-sort and Highway vqsort for `Float32`;
+  - 5% behind x86-simd-sort on `Float64`;
+  - `UInt32` is 10–13% behind the C++ sorts, because it pays two key-map passes;
+  - 1.5–2.5× faster than Base.
+- **Eight threads:**
+  - fastest for `Int32` and `Float32`;
+  - tied with x86-simd-sort for `Float64`;
+  - ChapelSort's radix sort stays ahead for 64-bit integers.
+- **Few distinct values:**
+  - small integer ranges use a counting sort (0.11 s at 2^26 keys);
+  - ChapelSort's counting path is still faster on this input;
+  - few distinct values spread over a wide range are handled by the quicksort
+    with equal-key peeling.
+- **Sorted and reversed inputs** are caught by a linear pre-check.
+
+[docs/DESIGN.md §7](docs/DESIGN.md) has the profile breakdown, per-level costs,
+the effect of each optimization and the ideas that were rejected.
+`bench/profile.jl` reproduces the breakdown.
 
 ## Limitations
 

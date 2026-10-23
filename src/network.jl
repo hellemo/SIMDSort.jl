@@ -184,7 +184,7 @@ end
 
 lanes(::Type{T}) where {T} = 32 ÷ sizeof(T)   # 256-bit vectors
 
-# The base case uses up to MAXROWS registers: 128 × 32-bit or 64 × 64-bit keys.
+# The base case uses up to MAXROWS registers: 256 32-bit or 128 64-bit keys.
 const MAXROWS = 32
 basecase_max(::Type{T}) where {T} = MAXROWS * lanes(T)
 
