@@ -122,6 +122,24 @@ end
         end
     end
 
+    @testset "counting sort and duplicates $T" for T in (Int32, UInt32, Int64, UInt64)
+        n = 2^14
+        for r in (0, 1, n ÷ 4 - 1, n ÷ 4, n ÷ 4 + 1, 2^16, 2^16 + 1)
+            lo = rand(rng, (typemin(T), typemax(T) - T(min(r, 2^16 + 1)), zero(T)))
+            hi = lo + T(r)
+            v = rand(rng, lo:hi, n)
+            v[1], v[2] = lo, hi             # the range is exactly r
+            @test check(v) && check(v; rev=true)
+            @test isequal(simdsort(v; ntasks=3), sort(v))
+        end
+        # Few distinct values spread over the whole range, and one dominant value.
+        for v in (rand(rng, rand(rng, T, 1000), 10^6), rand(rng, rand(rng, T, 3), 10^5),
+                  [rand(rng) < 0.7 ? T(42) : rand(rng, T) for _ in 1:10^6])
+            @test check(v) && check(v; rev=true)
+            @test isequal(simdsort(v; ntasks=8), sort(v))
+        end
+    end
+
     @testset "depth limit" begin
         # A zero depth budget sends every range to the fallback.
         v = rand(rng, Int32, 10^4)

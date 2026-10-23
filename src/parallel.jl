@@ -110,9 +110,10 @@ function pqsort!(p::Ptr{T}, n::Int, depth::Int, s::UInt64, ntasks::Int) where {T
     GC.@preserve buf begin
         while n > PAR_MIN && ntasks > 1 && depth > 0
             depth -= 1
-            pivot, s = choose_pivot(p, n, s)
-            m = part(p, n, pivot, pointer(buf), ntasks)
-            if m == n
+            pivot, dup, s = choose_pivot(p, n, s)
+            nt = ntasks     # a fresh binding: the closure must not capture `ntasks`
+            a, b = split!((p, n, x) -> part(p, n, x, pointer(buf), nt), p, n, pivot, dup)
+            if a == n
                 # As in qsort!: the pivot is the maximum.
                 mn, mx = vextrema(p, n)
                 if mn == mx
@@ -125,10 +126,10 @@ function pqsort!(p::Ptr{T}, n::Int, depth::Int, s::UInt64, ntasks::Int) where {T
                 continue
             end
             # Hand the smaller side to a new task with a proportional share of
-            # `ntasks`; keep the larger side here.
-            small = min(m, n - m)
+            # `ntasks`; keep the larger side here. [a, b) is done.
+            small = min(a, n - b)
             k = clamp(round(Int, ntasks * small / n), 1, ntasks - 1)
-            ps, pl, nl = m <= n - m ? (p, p + m * sizeof(T), n - m) : (p + m * sizeof(T), p, m)
+            ps, pl, nl = a <= n - b ? (p, p + b * sizeof(T), n - b) : (p + b * sizeof(T), p, a)
             s = xorshift(s)
             push!(tasks, Threads.@spawn pqsort!($ps, $small, $depth, $s, $k))
             p, n, ntasks = pl, nl, ntasks - k

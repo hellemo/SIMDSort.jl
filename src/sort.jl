@@ -20,18 +20,32 @@ end
 end
 
 """
-    choose_pivot(p, n, s) -> (pivot, s)
+    choose_pivot(p, n, s) -> (pivot, dup, s)
 
 Median of the lane-wise medians of three of three vectors loaded at pseudo-random
-offsets. Needs `n ≥ N`; `s` is the generator state.
+offsets. `dup` is set when at least N of the 9N sampled keys equal the pivot,
+which suggests a large block of equal keys. Needs `n ≥ N`; `s` is the generator
+state.
 """
 function choose_pivot(p::Ptr{T}, n::Int, s::UInt64) where {T}
+    N = lanes(T)
     a1, s = sample(p, n, s); a2, s = sample(p, n, s); a3, s = sample(p, n, s)
     a4, s = sample(p, n, s); a5, s = sample(p, n, s); a6, s = sample(p, n, s)
     a7, s = sample(p, n, s); a8, s = sample(p, n, s); a9, s = sample(p, n, s)
     m = med3(med3(a1, a2, a3), med3(a4, a5, a6), med3(a7, a8, a9))
-    return median_lane(m), s
+    pivot = median_lane(m)
+    pv = Vec{N,T}(pivot)
+    c = count(a1 == pv) + count(a2 == pv) + count(a3 == pv) + count(a4 == pv) +
+        count(a5 == pv) + count(a6 == pv) + count(a7 == pv) + count(a8 == pv) +
+        count(a9 == pv)
+    return pivot, c >= N, s
 end
+
+# The largest key below `x`, if there is one (floats: -0.0 and 0.0 count as equal).
+@inline has_prev(x::Integer) = x != typemin(x)
+@inline has_prev(x::AbstractFloat) = x != typemin(x)
+@inline prevkey(x::Integer) = x - one(x)
+@inline prevkey(x::AbstractFloat) = prevfloat(x)
 
 @inline function median_lane(v::Vec{N,T}) where {N,T}
     t = Tuple(v)
@@ -62,6 +76,23 @@ end
                          partition!(p, n, pivot, buf, Val(UNROLL))
 
 """
+    split!(partition, p, n, pivot, dup) -> (a, b)
+
+Partition with `partition(p, n, pivot)`. Returns `(a, b)`: the keys in `[0, a)`
+are below the pivot, those in `[b, n)` above it, and those in `[a, b)` equal to
+it, so they are done. The equal block is only split off (by a second partition
+of the left side with the next smaller key) when `dup` is set; otherwise
+`a == b`.
+"""
+@inline function split!(partition::F, p::Ptr{T}, n::Int, pivot::T, dup::Bool) where {F,T}
+    m = partition(p, n, pivot)
+    if dup && m >= 2UNROLL * lanes(T) && has_prev(pivot)
+        return partition(p, m, prevkey(pivot)), m
+    end
+    return m, m
+end
+
+"""
     qsort!(p, n, buf, depth, s) -> s
 
 Sort `n` keys at `p`. `buf` holds `basecase_max(T)` keys; past `depth` levels the
@@ -74,9 +105,9 @@ function qsort!(p::Ptr{T}, n::Int, buf::Ptr{T}, depth::Int, s::UInt64) where {T}
             return s
         end
         depth -= 1
-        pivot, s = choose_pivot(p, n, s)
-        m = partition_auto!(p, n, pivot, buf)
-        if m == n
+        pivot, dup, s = choose_pivot(p, n, s)
+        a, b = split!((p, n, x) -> partition_auto!(p, n, x, buf), p, n, pivot, dup)
+        if a == n
             # Nothing above the pivot: it is the maximum. Done if all keys are
             # equal; otherwise split off the copies of the minimum.
             mn, mx = vextrema(p, n)
@@ -87,13 +118,13 @@ function qsort!(p::Ptr{T}, n::Int, buf::Ptr{T}, depth::Int, s::UInt64) where {T}
             continue
         end
         # Recurse on the smaller side, loop on the larger one.
-        if m <= n - m
-            s = qsort!(p, m, buf, depth, s)
-            p += m * sizeof(T)
-            n -= m
+        if a <= n - b
+            s = qsort!(p, a, buf, depth, s)
+            p += b * sizeof(T)
+            n -= b
         else
-            s = qsort!(p + m * sizeof(T), n - m, buf, depth, s)
-            n = m
+            s = qsort!(p + b * sizeof(T), n - b, buf, depth, s)
+            n = a
         end
     end
     small_sort!(p, n, buf)
@@ -127,4 +158,73 @@ function presorted!(k::AbstractVector)
         return true
     end
     return false
+end
+
+# Key ranges up to this size (and below n/4) are sorted by counting.
+const COUNT_MAXRANGE = 1 << 16
+const COUNT_MINN = 1 << 12
+
+"""
+    counting_sort!(k, ntasks) -> Bool
+
+If the keys of `k` span a range of at most `COUNT_MAXRANGE` values and fewer than
+`length(k) ÷ 4`, sort `k` by counting each value and writing the runs, and return
+`true`. Otherwise leave `k` unchanged and return `false`.
+"""
+function counting_sort!(k::Vector{T}, ntasks::Int) where {T<:Signed}
+    n = length(k)
+    n < COUNT_MINN && return false
+    # A sample's range is at most the full range, so a wide sample rejects early
+    # without scanning all keys.
+    smn = smx = k[1]
+    @inbounds for i in 1:(n ÷ 1024):n
+        smn = min(smn, k[i])
+        smx = max(smx, k[i])
+    end
+    Int128(smx) - Int128(smn) > COUNT_MAXRANGE && return false
+    mn, mx = GC.@preserve k vextrema(pointer(k), n)
+    r = Int128(mx) - Int128(mn)
+    (r <= COUNT_MAXRANGE && r < n ÷ 4) || return false
+    r = Int(r)
+    chunks = collect(Iterators.partition(1:n, cld(n, max(1, ntasks))))
+    parts = Vector{Vector{Int}}(undef, length(chunks))
+    if length(chunks) == 1
+        parts[1] = count_keys(k, chunks[1], mn, r)
+    else
+        @sync for (i, c) in enumerate(chunks)
+            Threads.@spawn parts[i] = count_keys(k, c, mn, r)
+        end
+    end
+    counts = reduce(+, parts)
+    fill_runs!(k, counts, mn)
+    return true
+end
+
+# Counts of the keys k[c] .- mn, accumulated in four interleaved tables so that
+# runs of equal keys do not serialize on one counter.
+function count_keys(k::Vector{T}, c::UnitRange{Int}, mn::T, r::Int) where {T}
+    t = zeros(Int, r + 1, 4)
+    i = first(c)
+    @inbounds while i + 3 <= last(c)
+        t[(k[i] - mn) % Int + 1, 1] += 1
+        t[(k[i+1] - mn) % Int + 1, 2] += 1
+        t[(k[i+2] - mn) % Int + 1, 3] += 1
+        t[(k[i+3] - mn) % Int + 1, 4] += 1
+        i += 4
+    end
+    @inbounds while i <= last(c)
+        t[(k[i] - mn) % Int + 1, 1] += 1
+        i += 1
+    end
+    return vec(sum(t; dims=2))
+end
+
+function fill_runs!(k::Vector{T}, counts::Vector{Int}, mn::T) where {T}
+    j = 1
+    for (v, c) in enumerate(counts)
+        c == 0 && continue
+        fill!(view(k, j:j+c-1), mn + (v - 1) % T)
+        j += c
+    end
+    return k
 end
