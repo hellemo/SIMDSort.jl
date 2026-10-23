@@ -58,6 +58,27 @@ end
         end
     end
 
+    @testset "network" begin
+        # 0-1 principle: the column network sorts every 0/1 input of 16 keys.
+        @test all(0:(2^16 - 1)) do m
+            x = [(m >> i) & 1 for i in 0:15]
+            for (a, b) in SIMDQuickSort.batcher_pairs(16)
+                x[a+1] > x[b+1] && ((x[a+1], x[b+1]) = (x[b+1], x[a+1]))
+            end
+            issorted(x)
+        end
+        @testset "small_sort! $T" for T in (Int32, Int64)
+            buf = Vector{T}(undef, SIMDQuickSort.basecase_max(T))
+            @test all(Iterators.product(0:SIMDQuickSort.basecase_max(T), 1:20)) do (n, t)
+                a = isodd(t) ? rand(rng, T, n) : rand(rng, T(-2):T(2), n)
+                t == 2 && (a = rand(rng, [typemin(T), typemax(T)], n))
+                b = copy(a)
+                GC.@preserve b buf SIMDQuickSort.small_sort!(pointer(b), n, pointer(buf))
+                b == sort(a)
+            end
+        end
+    end
+
     @testset "$T" for T in TYPES
         for dist in DISTS, rev in (false, true)
             @test all(n -> check(gen(T, dist, n, rng); rev), 0:300)
