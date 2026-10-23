@@ -135,6 +135,149 @@ function network_body(R::Int, N::Int)
     return Expr(:block, ex...)
 end
 
+# --- Zigzag-merge networks (after F5, Arman & Loguinov, ICDE 2026, §III) -------
+#
+# Columns are sorted first (Batcher). Runs are then merged in "zigzag" order: a
+# sorted run of length r·k in r rows and k lanes keeps elements 2j and 2j+1 of
+# each block of 2k in rows 2t and 2t+1. Merging two such runs A and B (k lanes
+# each, side by side) is (F5, Algorithm 3):
+#   1. reverse every odd row within the 2k lanes;
+#   2. merge every column: its even rows (from one run) and odd rows (from the
+#      other) are two sorted sequences, so Batcher's odd-even merge across the
+#      registers suffices -- vertical min/max only, no shuffles;
+#   3. for exchange distances d = 1, 2, ..., k: in every pair of rows swap
+#      lane block t of the upper row with block t-1 of the lower row (odd t,
+#      blocks of d lanes), then compare-exchange the two rows.
+# The result is a 2k-zigzag run, with its columns in a fixed permutation; the
+# next level's reversal masks and the final transpose take it into account.
+# Compared with the bitonic merges of network_body this needs about 14% fewer
+# min/max and no blends.
+
+# Switch for experiments (read when a network is generated).
+const ZIGZAG = Ref(true)
+
+function batcher_merge_pairs(n::Int)          # the last level (p = n/2) of Batcher
+    pairs = Tuple{Int,Int}[]
+    p = n ÷ 2
+    k = p
+    while k >= 1
+        for j in (k % p):(2k):(n - 1 - k), i in 0:min(k - 1, n - j - k - 1)
+            (i + j) ÷ 2p == (i + j + k) ÷ 2p && push!(pairs, (i + j, i + j + k))
+        end
+        k ÷= 2
+    end
+    return pairs
+end
+
+# The data-independent schedule for an R×N zigzag network: for each merge level
+# (G = 2k lanes per merged run) the reversal mask (new lane <- old lane) and the
+# column permutation of the result, found by simulating the network on ranks.
+function zigzag_plan(R::Int, N::Int)
+    M = [collect(Float64, (r - 1) * N + 1:r * N) for r in 1:R]
+    for c in 1:N                                  # distinct, unsorted columns
+        col = shuffle_det([M[r][c] for r in 1:R], c)
+        for r in 1:R; M[r][c] = col[r]; end
+    end
+    rows = collect(0:R-1)
+    cex!(i, j) = (a = M[rows[i+1]+1]; b = M[rows[j+1]+1];
+                  M[rows[i+1]+1] = min.(a, b); M[rows[j+1]+1] = max.(a, b))
+    for (a, b) in batcher_pairs(R); cex!(a, b); end
+    levels = []
+    pos = [0]
+    G = 2
+    while G <= N
+        jpos = [pos; pos .+ G ÷ 2]
+        rev = zeros(Int, N)
+        for g in 0:(N ÷ G - 1), j in 0:G-1
+            rev[g*G + jpos[j+1] + 1] = g*G + jpos[G-j]
+        end
+        for ρ in 1:2:R-1; M[rows[ρ+1]+1] = M[rows[ρ+1]+1][rev .+ 1]; end
+        h = R ÷ 2
+        wire = [[2t for t in 0:h-1]; [2t + 1 for t in 0:h-1]]
+        for (x, y) in batcher_merge_pairs(R); cex!(wire[x+1], wire[y+1]); end
+        rows = [rows[wire[q+1]+1] for q in 0:R-1]
+        dists = [1 << i for i in 0:Int(log2(G))-1]
+        for d in dists, i in 0:2:R-1
+            x, y = M[rows[i+1]+1], M[rows[i+2]+1]
+            nx, ny = copy(x), copy(y)
+            for g in 0:(N ÷ G - 1), t in 1:2:(G ÷ d - 1), e in 0:d-1
+                cx, cy = g*G + t*d + e, g*G + (t-1)*d + e
+                nx[cx+1], ny[cy+1] = y[cy+1], x[cx+1]
+            end
+            M[rows[i+1]+1], M[rows[i+2]+1] = nx, ny
+            cex!(i, i + 1)
+        end
+        # Conceptual column of each lane: row 0 holds elements 0, 2, ..., 2G-2.
+        S = sort(vcat([M[rows[r+1]+1][1:G] for r in 0:R-1]...))
+        col = [(searchsortedfirst(S, M[rows[1]+1][c]) - 1) ÷ 2 for c in 1:G]
+        pos = invperm(col .+ 1) .- 1
+        push!(levels, (G = G, rev = rev, dists = dists, pos = copy(pos)))
+        G *= 2
+    end
+    return levels
+end
+
+# A fixed permutation (deterministic, no RNG state needed in generators).
+shuffle_det(v, seed) = v[sortperm([hash((seed, i)) for i in eachindex(v)])]
+
+function zigzag_body(R::Int, N::Int)
+    ex = Expr[]
+    names = [_v(ρ) for ρ in 0:R-1]                # logical row -> variable
+    push!(ex, :(($(names...),) = vs))
+    cnt = Ref(0)
+    fresh() = Symbol(:z, cnt[] += 1)
+    function cex(i, j)
+        a, b = names[i+1], names[j+1]
+        lo, hi = fresh(), fresh()
+        push!(ex, :(($lo, $hi) = (vmin($a, $b), vmax($a, $b))))
+        names[i+1], names[j+1] = lo, hi
+    end
+    for (a, b) in batcher_pairs(R); cex(a, b); end
+    plan = zigzag_plan(R, N)
+    for lv in plan
+        G = lv.G
+        for ρ in 1:2:R-1
+            z = fresh()
+            push!(ex, :($z = $(_shuf(names[ρ+1], lv.rev))))
+            names[ρ+1] = z
+        end
+        h = R ÷ 2
+        wire = [[2t for t in 0:h-1]; [2t + 1 for t in 0:h-1]]
+        for (x, y) in batcher_merge_pairs(R); cex(wire[x+1], wire[y+1]); end
+        names = [names[wire[q+1]+1] for q in 0:R-1]
+        for d in lv.dists, i in 0:2:R-1
+            mx = collect(0:N-1)                   # lanes of x: own or y's (N + lane)
+            my = collect(N:2N-1)
+            for g in 0:(N ÷ G - 1), t in 1:2:(G ÷ d - 1), e in 0:d-1
+                cx, cy = g*G + t*d + e, g*G + (t-1)*d + e
+                mx[cx+1] = N + cy
+                my[cy+1] = cx
+            end
+            x, y = names[i+1], names[i+2]
+            nx, ny = fresh(), fresh()
+            push!(ex, :($nx = $(_shuf(x, y, mx))))
+            push!(ex, :($ny = $(_shuf(x, y, my))))
+            names[i+1], names[i+2] = nx, ny
+            cex(i, i + 1)
+        end
+    end
+    # N-zigzag (columns permuted by pos) to row-major: rows 2t, 2t+1 hold keys
+    # 2tN + 2j (row 2t) and 2tN + 2j + 1 (row 2t+1) in lane pos[j].
+    pos = plan[end].pos
+    out = Symbol[]
+    for t in 0:R÷2-1
+        x, y = names[2t+1], names[2t+2]
+        for half in 0:1
+            mask = [begin m = half * N + q; j = m ÷ 2; iseven(m) ? pos[j+1] : N + pos[j+1] end for q in 0:N-1]
+            o = fresh()
+            push!(ex, :($o = $(_shuf(x, y, mask))))
+            push!(out, o)
+        end
+    end
+    push!(ex, :(return ($(out...),)))
+    return Expr(:block, ex...)
+end
+
 """
     halves_body(R, N)
 
@@ -210,7 +353,10 @@ register by register. `R` must be a power-of-two multiple of `N`.
     # 64-bit integers keep the single network: their min/max (compare and two
     # blends) make the split version slower (11-16% in the base case).
     split = R > 16 && R ÷ 2 >= N && !(T <: Integer && sizeof(T) == 8)
-    body = split ? halves_body(R, N) : network_body(R, N)
+    # The 16-row (and smaller) networks use zigzag merges; the 32-row ones are
+    # two zigzag halves joined by halves_body.
+    body = split ? halves_body(R, N) :
+           (R >= 2 && iseven(R) && R >= N ÷ 2 && ZIGZAG[]) ? zigzag_body(R, N) : network_body(R, N)
     # Inline: a call would pass all R vectors through memory.
     return Expr(:block, Expr(:meta, :inline), body)
 end
