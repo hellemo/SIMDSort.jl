@@ -83,7 +83,7 @@ x86-simd-sort and vqsort are called through the C shim in ChapelSort.jl's
   - behind on `Float64` (x86-simd-sort 7% faster, best 0.566 vs 0.607 s and
     median 0.590 vs 0.615 s) and on 1000 values spread over the whole `UInt64`
     range (vqsort 9% faster);
-  - 1.6–5× faster than Base on random inputs.
+  - 1.7–2.4× faster than Base on random keys (5.6× with 1000 distinct values).
 - **Eight threads:**
   - fastest for `Int32`, `UInt32` and small key ranges;
   - level with x86-simd-sort for `Float32`; 4% behind it for `Float64`;
