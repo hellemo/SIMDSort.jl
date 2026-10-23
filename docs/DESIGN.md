@@ -27,10 +27,13 @@ permutation table on AVX2.
 - **[MBM93]** P. M. McIlroy, K. Bostic, M. D. McIlroy. *Engineering radix sort.*
   Computing Systems 6(1), 1993. MSD refinement of string keys (§8).
 
+- **[CAFS]** V. S. Shlyk. *CAFS: A Cache-Aware Frequency Sort for Low-Cardinality
+  Integer Data on x86-64.* arXiv:2605.25040, 2026. Used: the Chao1 estimate of
+  the number of distinct keys from 1024 samples, and hash counting (§1).
+
 Considered but not implemented (DESIGN §7):
 - **IPS4o/IPS2Ra:** M. Axtmann, S. Witt, D. Ferizovic, P. Sanders. *Engineering
   in-place (shared-memory) sorting algorithms.* ACM TOPC, 2022. arXiv:2009.13569.
-- **CAFS:** frequency counting for low-cardinality keys.
 
 Notation: $N$ is the number of lanes per vector (8 for 32-bit and 4 for 64-bit keys
 with 256-bit AVX2 vectors), $n$ the length of the range being sorted.
@@ -77,6 +80,23 @@ papers.
 The fused pass replaced a separate min/max scan (38% of the time). At $2^{26}$
 keys in 0:1000 this takes 0.100 → 0.067 s on one thread and 0.074 → 0.023 s on
 eight.
+
+**Few distinct values in a wide range [CAFS]** (`src/hashcount.jl`). The steps:
+1. A strided sample of 1024 keys estimates the number of distinct values $K$ with
+   the Chao1 estimator $\hat K = u + f_1^2 / (2(f_2 + 1))$: $u$ distinct values in
+   the sample, $f_1$ of them seen once, $f_2$ twice.
+2. If $\hat K \le 2^{13}$, one pass counts the keys' bit patterns in an
+   open-addressing table with $4\hat K$ slots (linear probing, one table per
+   task, merged afterwards). The table stays in the L1/L2 cache.
+3. The distinct keys are sorted with `isless`, and each key's run is written by
+   several tasks.
+
+Floats are counted after the NaN partition. Equal bits mean equal keys there,
+and $-0.0$ and $0.0$ are distinct keys. If the sample underestimates (many rare
+values) and a table gets more than half full, the attempt is abandoned and the
+quicksort runs. This is tested with 99% repeated values and 1% unique ones.
+CAFS probes a cache-line bucket with AVX2 compares; here the probing is linear
+and scalar.
 
 **Floats** are sorted as floats:
 1. One vectorized, task-parallel scan counts NaNs, `-0.0`s and `+0.0`s from the

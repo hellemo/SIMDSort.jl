@@ -57,6 +57,8 @@ implementation deviates from the papers.
   - floats are sorted natively, with NaNs moved out first and signed zeros
     restored by count afterwards;
   - small integer ranges are counted instead of sorted, in one fused pass;
+  - few distinct values over a wide range (a Chao1 estimate from 1024 samples)
+    are counted in a cache-resident hash table, as in CAFS (Shlyk);
   - `UInt32` is sorted as is (AVX2 has unsigned 32-bit min/max).
 - **Partition:** in place and bidirectional (Bramas 2017; Wassenberg et al. 2022).
   Each vector is split with `vpartition`, which is a table lookup plus `vpermd` on
@@ -179,11 +181,13 @@ the source map at the top of `src/SIMDQuickSort.jl`):
   27(8), 1997. Used for the depth limit with a fallback sort.
 - **[MBM93]** P. M. McIlroy, K. Bostic, M. D. McIlroy. *Engineering radix sort.*
   Computing Systems 6(1), 1993. Used for the MSD refinement of string keys.
+- **[CAFS]** V. S. Shlyk. *CAFS: A Cache-Aware Frequency Sort for Low-Cardinality
+  Integer Data on x86-64.* [arXiv:2605.25040](https://arxiv.org/abs/2605.25040),
+  2026. Used for the Chao1 estimate of distinct keys and hash counting.
 
-Considered, not implemented (docs/DESIGN.md §7):
-- IPS4o/IPS2Ra (Axtmann, Witt, Ferizovic, Sanders; ACM TOPC 2022,
-  [arXiv:2009.13569](https://arxiv.org/abs/2009.13569));
-- CAFS (frequency counting for few distinct keys).
+Considered, not implemented (docs/DESIGN.md §7): IPS4o/IPS2Ra (Axtmann, Witt,
+Ferizovic, Sanders; ACM TOPC 2022,
+[arXiv:2009.13569](https://arxiv.org/abs/2009.13569)).
 
 The implementation is written from these papers. It uses no code from Google
 Highway (vqsort), Intel's x86-simd-sort or F5.

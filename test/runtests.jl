@@ -176,6 +176,20 @@ end
         end
     end
 
+    @testset "hash counting of few distinct values $T" for T in TYPES
+        n = 2^17
+        sample(k) = T <: AbstractFloat ? T.(randn(rng, k)) : rand(rng, T, k)
+        cases = [rand(rng, sample(1000), n), rand(rng, sample(3), n), fill(sample(1)[1], n),
+                 # The sample sees few values, but 1% are unique: the table overflows
+                 # and the quicksort takes over.
+                 [rand(rng) < 0.99 ? x : y for (x, y) in zip(rand(rng, sample(500), n), sample(n))]]
+        T <: AbstractFloat && push!(cases, rand(rng, T[0.0, -0.0, 1.0, -1.0, NaN, -NaN, Inf, -Inf], n))
+        T <: AbstractFloat || push!(cases, rand(rng, [typemin(T), typemax(T), zero(T), one(T)], n))
+        for v in cases, rev in (false, true), nt in (1, 8)
+            @test isequal(simdsort(v; rev, ntasks=nt), sort(v; rev))
+        end
+    end
+
     @testset "Int64 leaves as doubles, also with subnormals flushed" begin
         # Small key ranges give offsets that are subnormal as doubles.
         for v in (rand(rng, Int64(-50):Int64(50), 10^5), rand(rng, Int64, 10^5),

@@ -15,6 +15,7 @@ SIMD.jl. See `docs/DESIGN.md` for the algorithm and its sources.
 #                                                         sort.jl (double min/max leaves),
 #                                                         perm.jl (common-prefix skip)
 #   [MBM93]  McIlroy, Bostic & McIlroy, radix sort (1993) perm.jl (MSD refinement)
+#   [CAFS]   Shlyk, cache-aware frequency sort (2026)     hashcount.jl
 # Everything else (key maps, prefetch, three-way partition, parallel partition,
 # counting sort, windowed keys, string prefix cache, bignum encodings) is this
 # package's own design or textbook technique.
@@ -30,6 +31,7 @@ include("partition.jl")
 include("sort.jl")
 include("parallel.jl")
 include("perm.jl")
+include("hashcount.jl")
 include("wide.jl")
 include("compound.jl")
 
@@ -53,6 +55,7 @@ function simdsort!(v::Vector{T}; rev::Bool=false, ntasks::Integer=1) where {T<:S
     counting_sort!(v, rev, Int(ntasks)) && return v
     # Check for sorted input before the key map, which preserves the order.
     presorted!(v, rev) && return v
+    hash_count_sort!(v, rev, Int(ntasks)) && return v
     S = signedkey(T)
     GC.@preserve v begin
         p = Ptr{S}(pointer(v))
@@ -72,6 +75,7 @@ function simdsort!(v::Vector{UInt32}; rev::Bool=false, ntasks::Integer=1)
     n = length(v)
     n <= 1 && return v
     counting_sort!(v, rev, Int(ntasks)) && return v
+    hash_count_sort!(v, rev, Int(ntasks)) && return v
     rev && foreach_chunk(complement!, v, ntasks)
     GC.@preserve v (presorted!(v) || sort_keys!(pointer(v), n, Int(ntasks)))
     rev && foreach_chunk(complement!, v, ntasks)
@@ -89,6 +93,7 @@ function simdsort!(v::Vector{T}; rev::Bool=false, ntasks::Integer=1) where {T<:U
     GC.@preserve v begin
         p = pointer(v, first(r))
         k = unsafe_wrap(Array, p, n)
+        hash_count_sort!(k, rev, Int(ntasks)) && return v
         rev && foreach_chunk(negate!, k, ntasks)
         presorted!(k) || sort_keys!(p, n, Int(ntasks))
         # After negation (rev) the +0.0s of the input are the -0.0s.
