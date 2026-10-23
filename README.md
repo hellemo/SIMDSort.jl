@@ -1,5 +1,18 @@
 # SIMDQuickSort.jl
 
+> [!WARNING]
+> SIMDQuickSort.jl depends on an **unreleased fork of SIMD.jl**: branch
+> [`permute-compress`](https://github.com/hellemo/SIMD.jl/tree/permute-compress)
+> of `hellemo/SIMD.jl`. It adds `vpartition`, `vpermute` and a faster `vstorec`.
+> The registered SIMD.jl does not have these functions, so the package does not
+> work with it.
+> - On Julia 1.11 and later, `Project.toml` points to the fork through
+>   `[sources]`. In this repository that is a local path (`../SIMD.jl`), so the
+>   fork has to be checked out next to it.
+> - On Julia 1.10, `Pkg.develop` both packages.
+>
+> This will stay so until the changes are merged into SIMD.jl and released.
+
 An experimental vectorized quicksort in pure Julia for `Int32`, `Int64`, `UInt32`,
 `UInt64`, `Float32` and `Float64` vectors. It is built on the SIMD.jl fork with
 runtime permutes and compress (`vpartition`, `vpermute`), branch
