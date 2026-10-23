@@ -224,6 +224,20 @@ end
             @test simdsortperm(sy; rev, ntasks=nt) == sortperm(sy; rev)
             @test isequal(simdsort(sy; rev, ntasks=nt), sort(sy; rev))
         end
+        # Views: SubString{String}, and StringView (Julia 1.14+).
+        long = [randstr(rand(rng, 0:30)) * "\xff" for _ in 1:20_000]
+        subs = [SubString(s, 1, max(0, ncodeunits(s) - rand(rng, 1:3))) for s in long]
+        for rev in (false, true), nt in (1, 8)
+            @test simdsortperm(subs; rev, ntasks=nt) == sortperm(subs; rev)
+            @test isequal(simdsort(subs; rev, ntasks=nt), sort(subs; rev))
+        end
+        @static if isdefined(Base, :StringView)
+            views = [Base.StringView(Vector{UInt8}(s)) for s in long]
+            for rev in (false, true), nt in (1, 8)
+                @test simdsortperm(views; rev, ntasks=nt) == sortperm(views; rev)
+                @test isequal(simdsort(views; rev, ntasks=nt), sort(views; rev))
+            end
+        end
         for n in 0:100
             v = rand(rng, tricky, n)
             @test simdsortperm(v) == sortperm(v) && isequal(simdsort(v; rev=true), sort(v; rev=true))

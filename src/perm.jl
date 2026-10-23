@@ -48,9 +48,18 @@ struct ByteKeys <: KeySource
     lentie::Bool    # byte-equal keys of different length differ (strings)
 end
 
+# Strings read in place: String, SubString{String}, and (Julia 1.14+) StringViews
+# of contiguous byte vectors.
+@static if isdefined(Base, :DenseStringView)
+    const ByteString = Union{String,SubString{String},Base.DenseStringView}
+    bytes_of(s::Base.DenseStringView) = (pointer(codeunits(s)), ncodeunits(s))
+else
+    const ByteString = Union{String,SubString{String}}
+end
+
 # The bytes of a String, or the name of a Symbol (NUL-free, NUL-terminated). The
 # caller keeps the vector of values alive while the pointers are used.
-bytes_of(s::String) = (pointer(s), ncodeunits(s))
+bytes_of(s::Union{String,SubString{String}}) = (pointer(s), ncodeunits(s))
 bytes_of(s::Symbol) = (p = Base.unsafe_convert(Ptr{UInt8}, s); (p, Int(ccall(:strlen, Csize_t, (Ptr{UInt8},), p))))
 
 function ByteKeys(v::AbstractVector, rev::Bool, ntasks::Int)
@@ -332,7 +341,7 @@ function simdsortperm(v::Vector{T}; rev::Bool=false, ntasks::Integer=1) where {T
 end
 
 function simdsortperm(v::Vector{T}; rev::Bool=false,
-                      ntasks::Integer=1) where {T<:Union{String,Symbol}}
+                      ntasks::Integer=1) where {T<:Union{ByteString,Symbol}}
     length(v) <= 1 && return collect(1:length(v))
     if T === Symbol
         r = symbol_ranks(v, Int(ntasks))
@@ -389,7 +398,7 @@ end
 Sort strings or symbols in the order of `isless` (bytewise, shorter first on a
 common prefix), through [`simdsortperm`](@ref).
 """
-function simdsort!(v::Vector{T}; rev::Bool=false, ntasks::Integer=1) where {T<:Union{String,Symbol}}
+function simdsort!(v::Vector{T}; rev::Bool=false, ntasks::Integer=1) where {T<:Union{ByteString,Symbol}}
     if T === Symbol
         r = symbol_ranks(v, Int(ntasks))
         if r !== nothing
