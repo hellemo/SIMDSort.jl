@@ -24,7 +24,7 @@ simdsortperm(v::Vector{<:DF}; rev::Bool=false, ntasks::Integer=1) =
     simdsortperm(packed(v); rev, ntasks)
 
 function simdsort!(v::Vector{<:DF}; rev::Bool=false, ntasks::Integer=1)
-    copyto!(v, v[simdsortperm(v; rev, ntasks)])
+    SIMDQuickSort.permute_by!(v, simdsortperm(v; rev, ntasks), Int(ntasks))
     return v
 end
 

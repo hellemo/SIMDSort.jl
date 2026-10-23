@@ -40,7 +40,7 @@ end
 
 function simdsort!(v::Vector{T}; rev::Bool=false, ntasks::Integer=1) where {T<:Union{Signed,Unsigned}}
     iswideint(T) || return sort!(v; rev)
-    copyto!(v, v[simdsortperm(v; rev, ntasks)])
+    permute_by!(v, simdsortperm(v; rev, ntasks), Int(ntasks))
     return v
 end
 
@@ -136,6 +136,6 @@ function simdsortperm(v::Vector{T}; rev::Bool=false, ntasks::Integer=1) where {T
 end
 
 function simdsort!(v::Vector{T}; rev::Bool=false, ntasks::Integer=1) where {T<:Union{BigInt,BigFloat}}
-    copyto!(v, v[simdsortperm(v; rev, ntasks)])
+    permute_by!(v, simdsortperm(v; rev, ntasks), Int(ntasks))
     return v
 end

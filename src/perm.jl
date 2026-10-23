@@ -297,6 +297,26 @@ end
 cmp_cached(ks::KeySource, a, pa, b, pb) = cmp_from(ks, a, b, 0)
 
 """
+    permute_by!(v, p, ntasks)
+
+`v .= v[p]`, gathering and copying back with up to `ntasks` tasks.
+"""
+function permute_by!(v::AbstractVector, p::Vector{Int}, ntasks::Int)
+    w = similar(v)
+    foreach_range(length(v), ntasks) do r
+        @inbounds for i in r
+            w[i] = v[p[i]]
+        end
+    end
+    foreach_range(length(v), ntasks) do r
+        @inbounds for i in r
+            v[i] = w[i]
+        end
+    end
+    return v
+end
+
+"""
     simdsortperm(v; rev=false, ntasks=1) -> Vector{Int}
 
 The permutation that sorts `v` stably (as `sortperm(v; rev)`), for vectors of
@@ -384,7 +404,6 @@ function simdsort!(v::Vector{T}; rev::Bool=false, ntasks::Integer=1) where {T<:U
         end
     end
     p = simdsortperm(v; rev, ntasks)
-    w = v[p]
-    copyto!(v, w)
+    permute_by!(v, p, Int(ntasks))
     return v
 end
