@@ -79,14 +79,14 @@ end
         end
     end
 
-    @testset "partition! $T U=$U" for T in (Int32, Int64), U in (1, 2, 4)
+    @testset "partition! $T U=$U PF=$PF" for T in (Int32, Int64), U in (1, 2, 4, 8), PF in (false, true)
         N = SIMDQuickSort.lanes(T)
         buf = Vector{T}(undef, (2U + 1) * N)
         @test all(Iterators.product(2U*N:2U*N+200, 1:6)) do (n, t)
             a = t <= 2 ? rand(rng, T(-3):T(3), n) : rand(rng, T, n)
             piv = t == 3 ? maximum(a) : t == 4 ? minimum(a) : a[rand(rng, 1:n)]
             b = copy(a)
-            m = GC.@preserve b buf SIMDQuickSort.partition!(pointer(b), n, piv, pointer(buf), Val(U))
+            m = GC.@preserve b buf SIMDQuickSort.partition!(pointer(b), n, piv, pointer(buf), Val(U), Val(PF))
             all(<=(piv), view(b, 1:m)) && all(>(piv), view(b, m+1:n)) && sort(b) == sort(a)
         end
     end

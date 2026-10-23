@@ -57,6 +57,10 @@ function vextrema(p::Ptr{T}, n::Int) where {T}
     return minimum(min(lo, x)), maximum(max(hi, x))
 end
 
+@inline partition_auto!(p::Ptr{T}, n::Int, pivot::T, buf::Ptr{T}) where {T} =
+    use_prefetch(T, n) ? partition!(p, n, pivot, buf, Val(UNROLL), Val(true)) :
+                         partition!(p, n, pivot, buf, Val(UNROLL))
+
 """
     qsort!(p, n, buf, depth, s) -> s
 
@@ -71,13 +75,13 @@ function qsort!(p::Ptr{T}, n::Int, buf::Ptr{T}, depth::Int, s::UInt64) where {T}
         end
         depth -= 1
         pivot, s = choose_pivot(p, n, s)
-        m = partition!(p, n, pivot, buf, Val(UNROLL))
+        m = partition_auto!(p, n, pivot, buf)
         if m == n
             # Nothing above the pivot: it is the maximum. Done if all keys are
             # equal; otherwise split off the copies of the minimum.
             mn, mx = vextrema(p, n)
             mn == mx && return s
-            m = partition!(p, n, mn, buf, Val(UNROLL))
+            m = partition_auto!(p, n, mn, buf)
             p += m * sizeof(T)
             n -= m
             continue

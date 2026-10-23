@@ -24,8 +24,8 @@ function ppartition!(p::Ptr{T}, n::Int, pivot::T, ntasks::Int) where {T}
             buf = scratch(T)
             lo = bounds[i]
             GC.@preserve buf begin
-                counts[i] = partition!(p + lo * sizeof(T), bounds[i+1] - lo, pivot,
-                                        pointer(buf), Val(UNROLL))
+                counts[i] = partition_auto!(p + lo * sizeof(T), bounds[i+1] - lo, pivot,
+                                            pointer(buf))
             end
         end
     end
@@ -140,4 +140,4 @@ function pqsort!(p::Ptr{T}, n::Int, depth::Int, s::UInt64, ntasks::Int) where {T
 end
 
 @inline part(p::Ptr{T}, n, pivot, buf, ntasks) where {T} =
-    n > PPART_MIN ? ppartition!(p, n, pivot, ntasks) : partition!(p, n, pivot, buf, Val(UNROLL))
+    n > PPART_MIN ? ppartition!(p, n, pivot, ntasks) : partition_auto!(p, n, pivot, buf)

@@ -8,6 +8,37 @@
 @inline vldU(::Val{U}, ::Val{N}, p::Ptr, i::Int) where {U,N} =
     ntuple(u -> vld(Val(N), p, i + (u - 1) * N), Val(U))
 
+# Software prefetch (read, high locality) of the cache line at `p`. The IR uses
+# opaque pointers from LLVM 17 on, typed `i8*` pointers before.
+@static if Base.libllvm_version >= v"17"
+    @inline prefetch(p::Ptr) = Base.llvmcall(("""
+        declare void @llvm.prefetch.p0(ptr, i32, i32, i32)
+        define void @entry(i64 %a) #0 {
+          %p = inttoptr i64 %a to ptr
+          call void @llvm.prefetch.p0(ptr %p, i32 0, i32 3, i32 1)
+          ret void
+        }
+        attributes #0 = { alwaysinline }
+        """, "entry"), Cvoid, Tuple{UInt}, UInt(p))
+else
+    @inline prefetch(p::Ptr) = Base.llvmcall(("""
+        declare void @llvm.prefetch.p0i8(i8*, i32, i32, i32)
+        define void @entry(i64 %a) #0 {
+          %p = inttoptr i64 %a to i8*
+          call void @llvm.prefetch.p0i8(i8* %p, i32 0, i32 3, i32 1)
+          ret void
+        }
+        attributes #0 = { alwaysinline }
+        """, "entry"), Cvoid, Tuple{UInt}, UInt(p))
+end
+
+# Prefetch distance in keys, and the range size (bytes) from which prefetching
+# pays off: below about the L2 size the hardware keeps up and the extra
+# instructions only cost time.
+const PFDIST = 512
+const PF_MIN_BYTES = 2 << 20
+use_prefetch(::Type{T}, n::Int) where {T} = n * sizeof(T) > PF_MIN_BYTES
+
 # Partition one vector: keys ≤ pivot are written from the left write position
 # `lw` upwards, the others end at the right write position `rw` (exclusive).
 # Both stores are full width; the caller guarantees the extra lanes land in free
@@ -26,14 +57,14 @@ end
 end
 
 """
-    partition!(p, n, pivot, buf, Val(U), Val(branchfree=false)) -> m
+    partition!(p, n, pivot, buf, Val(U), Val(PF)=Val(false), Val(branchfree=false)) -> m
 
 Reorder the `n ≥ 2U*N` keys at `p` so that the first `m` are `≤ pivot` and the rest
 are `> pivot`. `buf` must hold at least `2U*N + N` keys. `U` vectors are processed
-per iteration.
+per iteration. With `PF`, the keys `PFDIST` ahead of each read are prefetched.
 """
 function partition!(p::Ptr{T}, n::Int, pivot::T, buf::Ptr{T}, ::Val{U},
-                    ::Val{BF}=Val(false)) where {T,U,BF}
+                    ::Val{PF}=Val(false), ::Val{BF}=Val(false)) where {T,U,PF,BF}
     N = lanes(T)
     UN = U * N
     pv = Vec{N,T}(pivot)
@@ -56,6 +87,12 @@ function partition!(p::Ptr{T}, n::Int, pivot::T, buf::Ptr{T}, ::Val{U},
         else
             right -= UN
             src = right
+        end
+        if PF
+            pa = p + (fromleft ? left + PFDIST : right - PFDIST) * sizeof(T)
+            for c in 0:64:(UN * sizeof(T) - 1)
+                prefetch(pa + c)
+            end
         end
         lw, rw = part_all(vldU(Val(U), Val(N), p, src), pv, p, lw, rw)
     end
