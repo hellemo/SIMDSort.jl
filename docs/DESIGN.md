@@ -31,22 +31,40 @@ one signed vector compare implements `isless`:
 | type | map $k(x)$ on the bit pattern |
 |---|---|
 | `Int32`, `Int64` | $x$ |
-| `UInt32`, `UInt64` | $x \oplus 2^{w-1}$ (flip the sign bit) |
+| `UInt64` | $x \oplus 2^{w-1}$ (flip the sign bit) |
+| `UInt32` | $x$ (sorted as unsigned) |
 | `rev = true` | additionally $\lnot k$ |
 
-Every map is an involution, so the same function restores the original bits. AVX2
-has no unsigned compares; this map is why the kernels only need signed compares.
+Every map is an involution, so the same function restores the original bits.
+- AVX2 has no unsigned 64-bit compare or min/max, so `UInt64` is mapped. Sorting
+  it natively (an extra xor per compare, and an in-register sign flip in the base
+  case) measured 1.4% slower than paying the two map passes.
+- AVX2 does have unsigned 32-bit min/max (`vpminud`/`vpmaxud`; a compare is
+  `vpminud` + `vpcmpeqd`). Sorting `UInt32` natively saves the two passes:
+  0.353 → 0.318 s at $2^{26}$ keys, the same as `Int32`.
 [WBGS22, §2.3] handles key types and sort order through traits instead; the map
 is our choice.
 
 **Small key ranges.** Before the map, integer inputs whose values span at most
-$2^{16}$ values, and fewer than $n/4$, are sorted by counting:
-- four interleaved count tables per task, so that runs of equal keys do not
-  serialize on one counter;
-- then the runs are written (in descending order for `rev`).
+$2^{16}$ values, and fewer than $n/4$, are sorted by counting. This is not in the
+papers.
+1. A 1024-key sample rejects wide ranges at once: a sample's range can only be
+   smaller than the full range.
+2. The sample also sets up the count table: its range plus a margin of 32 on each
+   side, clamped to the type's range.
+3. Each key goes to slot $\min((x - \mathit{base}) \bmod 2^w, W)$. This is exact
+   because the table interval never wraps, and slot $W$ collects keys outside the
+   table.
+4. Only if that overflow slot is non-zero is the exact min/max scanned and the
+   counting repeated.
+5. Counting uses four interleaved tables per task, so that runs of equal keys do
+   not serialize on one counter.
+6. The runs are written by up to `ntasks` tasks, each filling an equal slice of
+   the output (in descending order for `rev`).
 
-A 1024-key sample rejects wide ranges before the full min/max scan; a sample's
-range can only be smaller than the full range. This is not in the papers.
+The fused pass replaced a separate min/max scan (38% of the time). At $2^{26}$
+keys in 0:1000 this takes 0.100 → 0.067 s on one thread and 0.074 → 0.023 s on
+eight.
 
 **Floats** are sorted as floats:
 1. One vectorized, task-parallel scan counts NaNs, `-0.0`s and `+0.0`s from the
@@ -323,3 +341,45 @@ change was compared against the previous commit in alternating runs.
   random keys (e).
 - **8 threads:** the top-level parallel partitions are bandwidth-bound (a
   $2^{26}$-key `Int32` partition takes as long as `copyto!`).
+
+### g. The final gaps
+
+A second round targeted the gaps left after §7.d. All comparisons below were run
+interleaved in one process, alternating the two versions, with fresh data;
+separate processes on this laptop drift by ±5–10%.
+
+| gap | result |
+|---|---|
+| `UInt32` (two key-map passes) | closed: native unsigned kernels, 0.353 → 0.318 s, equal to `Int32` (§1) |
+| Counting path vs ChapelSort's | closed: fused counting and parallel fill (§1) |
+| `Float64` vs x86-simd-sort, 1 thread | open, about 7% (best 0.566 vs 0.607 s, median 0.590 vs 0.615 s) |
+| `UInt64`, 1000 random values over the whole range, vs vqsort | open, about 9% |
+| Sorted / reverse-sorted integer inputs | closed: detected before the key map, so as fast as Base |
+
+**`Float64`.** An earlier comparison that re-sorted one input repeatedly showed a
+tie (0.620 vs 0.621 s). With the fresh-input protocol below, x86-simd-sort is
+consistently about 7% faster, in two full benchmark runs. Our partition kernel
+compiles to the minimal sequence (compare, movemask, table load, `vpermps`, two
+stores) and runs near the copy bandwidth out of cache. The difference is
+therefore elsewhere: in the base case (202 ns per 128 keys) or in the pass
+count. It is not investigated further here.
+
+**Why the wide-range duplicates case stays open.**
+- **Pass count:** the sort makes 12.4 partition passes over the data, against
+  $\log_2 1000 \approx 10$ ideal.
+- **Fixes tried, none better than ±1%:**
+  - a lower duplicate threshold (2 or 1 equal keys in $9N$ samples): up to 35%
+    slower everywhere;
+  - one partition with the next smaller key when the pivot is the maximum,
+    instead of a min/max scan plus a partition;
+  - choosing the side to peel the equal block from by the sample counts.
+- **Native `UInt64`** removes the map passes but costs as much in the kernels.
+- **Closing it** would need a vectorized three-way partition or a sample-sort
+  top level.
+
+**Benchmark protocol.** `bench/bench.jl` draws a fresh input for every round (the
+same input for all methods within a round), runs the methods in a shuffled order
+each round, and reports the best round. Timing repeated sorts of one input could
+let the branch predictor learn its pattern, especially for inputs that fit in
+cache. Interleaving spreads thermal and power drift evenly over the methods.
+

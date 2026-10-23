@@ -29,7 +29,8 @@ implementation deviates from the papers.
     compares), and the map is undone after sorting;
   - floats are sorted natively, with NaNs moved out first and signed zeros
     restored by count afterwards;
-  - small integer ranges are counted instead of sorted.
+  - small integer ranges are counted instead of sorted, in one fused pass;
+  - `UInt32` is sorted as is (AVX2 has unsigned 32-bit min/max).
 - **Partition:** in place and bidirectional (Bramas 2017; Wassenberg et al. 2022).
   Each vector is split with `vpartition`, which is a table lookup plus `vpermd` on
   AVX2, and written with two full-width stores. In cache this costs about 0.11 ns
@@ -48,45 +49,51 @@ implementation deviates from the papers.
 
 ## Results
 
-Seconds per sort, mean of 5 runs (best in bold). Measured on an Intel Core Ultra 7
-268V (Lunar Lake: 4 P + 4 E cores, AVX2, 15 GB) with Julia 1.13.2 and 8 threads.
+Seconds per sort, best of 9 interleaved rounds (5 for `Base.sort!`); the best
+time per row is in bold. Measured on an Intel Core Ultra 7 268V (Lunar Lake: 4 P
++ 4 E cores, AVX2, 15 GB) with Julia 1.13.2 and 8 threads.
+
+Each round draws a fresh input, the same for all methods within the round, and
+runs the methods in a shuffled order. No method is timed on an input whose branch
+pattern the predictor has learnt in an earlier repetition, and thermal drift is
+spread evenly. `bench/results/bench.csv` also has the medians.
+
 x86-simd-sort and vqsort are called through the C shim in ChapelSort.jl's
 `bench/simd`. Run with `julia -t 8 --project=bench bench/bench.jl`.
 
 | case | Base.sort! (1 thr) | ChapelSort.jl psort! (1 thr) | ChapelSort.jl psort! (8 thr) | SIMDQuickSort.jl (1 thr) | SIMDQuickSort.jl (8 thr) | x86-simd-sort (1 thr) | x86-simd-sort (8 thr) | Highway vqsort (1 thr) |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| UInt64, 2^27 | 3.289 | 1.735 | **0.431** | 1.473 | 0.515 | 2.053 | 0.605 | 1.713 |
-| Int64, 2^26 | 1.534 | 0.869 | **0.213** | 0.675 | 0.220 | 0.843 | 0.251 | 0.772 |
-| Float64 (randn), 2^26 | 1.589 | 1.077 | 0.214 | 0.626 | 0.199 | 0.597 | **0.199** | 0.822 |
-| UInt32, 2^26 | 0.553 | 0.546 | 0.146 | 0.362 | 0.129 | 0.328 | **0.116** | 0.320 |
-| Int32, 2^26 | 0.533 | 0.507 | 0.112 | 0.304 | **0.097** | 0.346 | 0.100 | 0.313 |
-| Float32 (randn), 2^26 | 0.771 | 0.548 | 0.122 | 0.359 | **0.102** | 0.348 | 0.119 | 0.345 |
-| UInt64 in 0:1000, 2^26 | 0.081 | 0.084 | **0.029** | 0.107 | 0.083 | 0.374 | 0.148 | 0.284 |
-| UInt64 sorted, 2^26 | 0.029 | 0.031 | **0.012** | 0.088 | 0.052 | 1.051 | 0.313 | 0.799 |
-| UInt64 reversed, 2^26 | 0.059 | 0.058 | **0.022** | 0.102 | 0.079 | 1.030 | 0.301 | 0.769 |
-| UInt64, 1000 random values, 2^26 | 1.707 | 1.039 | 0.183 | 0.324 | 0.167 | 0.356 | **0.148** | 0.293 |
-| Int32, 2^20 | 0.006 | 0.009 | 0.004 | 0.004 | **0.002** | 0.004 | 0.003 | 0.004 |
+| UInt64, 2^27 | 3.196 | 1.483 | **0.323** | 1.459 | 0.474 | 1.998 | 0.587 | 1.671 |
+| Int64, 2^26 | 1.532 | 0.866 | **0.188** | 0.654 | 0.196 | 0.832 | 0.250 | 0.759 |
+| Float64 (randn), 2^26 | 1.482 | 1.031 | 0.216 | 0.607 | 0.192 | 0.566 | **0.184** | 0.807 |
+| UInt32, 2^26 | 0.510 | 0.463 | 0.095 | 0.302 | **0.093** | 0.332 | 0.100 | 0.310 |
+| Int32, 2^26 | 0.515 | 0.480 | 0.115 | 0.307 | **0.093** | 0.328 | 0.101 | 0.306 |
+| Float32 (randn), 2^26 | 0.714 | 0.519 | 0.108 | 0.333 | 0.097 | 0.325 | **0.097** | 0.330 |
+| UInt64 in 0:1000, 2^26 | 0.079 | 0.084 | 0.030 | 0.065 | **0.021** | 0.325 | 0.139 | 0.276 |
+| UInt64, 1000 random values, 2^26 | 1.668 | 0.975 | **0.132** | 0.298 | 0.149 | 0.331 | 0.136 | 0.273 |
+| UInt64 sorted, 2^26 | 0.029 | 0.029 | **0.009** | 0.027 | 0.027 | 0.985 | 0.275 | 0.733 |
+| UInt64 reversed, 2^26 | 0.054 | 0.057 | **0.020** | 0.052 | 0.052 | 0.993 | 0.272 | 0.722 |
+| Int32, 2^20 | 0.005 | 0.007 | 0.002 | 0.003 | **0.002** | 0.003 | 0.002 | 0.003 |
 
-- **One thread, random keys:**
-  - fastest of all measured sorts for `Int32`, `Int64` and `UInt64`;
-  - within 4% of x86-simd-sort and Highway vqsort for `Float32`;
-  - 5% behind x86-simd-sort on `Float64`;
-  - `UInt32` is 10–13% behind the C++ sorts, because it pays two key-map passes;
-  - 1.5–2.5× faster than Base.
+- **One thread:**
+  - fastest of all measured sorts for `Int64`, `UInt64`, `UInt32`, small key
+    ranges, and sorted/reversed inputs;
+  - level with vqsort for `Int32` (0.307 vs 0.306 s);
+  - within 3% of the C++ sorts for `Float32`;
+  - behind on `Float64` (x86-simd-sort 7% faster, best 0.566 vs 0.607 s and
+    median 0.590 vs 0.615 s) and on 1000 values spread over the whole `UInt64`
+    range (vqsort 9% faster);
+  - 1.6–5× faster than Base on random inputs.
 - **Eight threads:**
-  - fastest for `Int32` and `Float32`;
-  - tied with x86-simd-sort for `Float64`;
-  - ChapelSort's radix sort stays ahead for 64-bit integers.
-- **Few distinct values:**
-  - small integer ranges use a counting sort (0.11 s at 2^26 keys);
-  - ChapelSort's counting path is still faster on this input;
-  - few distinct values spread over a wide range are handled by the quicksort
-    with equal-key peeling.
-- **Sorted and reversed inputs** are caught by a linear pre-check.
+  - fastest for `Int32`, `UInt32` and small key ranges;
+  - level with x86-simd-sort for `Float32`; 4% behind it for `Float64`;
+  - ChapelSort's parallel radix sort leads for 64-bit integers (`UInt64` at
+    2^27: 0.323 vs 0.474 s; `Int64`: 0.188 vs 0.196 s), wide-range duplicates
+    and presorted inputs.
 
 [docs/DESIGN.md §7](docs/DESIGN.md) has the profile breakdown, per-level costs,
-the effect of each optimization and the ideas that were rejected.
-`bench/profile.jl` reproduces the breakdown.
+the effect of each optimization, the analysis of the remaining gaps, and the
+ideas that were rejected. `bench/profile.jl` reproduces the breakdown.
 
 ## Limitations
 
