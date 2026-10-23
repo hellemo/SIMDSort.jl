@@ -139,3 +139,44 @@ function simdsort!(v::Vector{T}; rev::Bool=false, ntasks::Integer=1) where {T<:U
     permute_by!(v, simdsortperm(v; rev, ntasks), Int(ntasks))
     return v
 end
+
+# --- multi-word keys -----------------------------------------------------------
+
+"""
+    WordKeys(w::Vector{NTuple{M,UInt64}}, rev)
+
+Keys given as `M` big-endian 64-bit words each (most significant first), for
+types whose order key is wider than 128 bits, such as MultiFloats with three or
+more limbs. Package extensions build the words.
+"""
+struct WordKeys{M} <: KeySource
+    w::Vector{NTuple{M,UInt64}}
+    rev::Bool
+end
+
+keywidth(::WordKeys{M}) where {M} = 64M
+@inline exhausted(ks::WordKeys, i::Int, off::Int) = off >= keywidth(ks)
+
+# Bits [off, off + K) (K ≤ 63) lie within words q and q + 1, q = off ÷ 64.
+@inline function keybits(ks::WordKeys{M}, i::Int, off::Int, K::Int) where {M}
+    off >= 64M && return zero(UInt64)
+    w = @inbounds ks.w[i]
+    q = off >> 6
+    hi = @inbounds w[q+1]
+    lo = q + 2 <= M ? @inbounds(w[q+2]) : zero(UInt64)
+    if ks.rev
+        hi, lo = ~hi, q + 2 <= M ? ~lo : zero(UInt64)
+    end
+    x = ((UInt128(hi) << 64 | UInt128(lo)) << (off & 63)) >> (128 - K)
+    return x % UInt64
+end
+
+"""
+    wordkeys_sortperm(w::Vector{NTuple{M,UInt64}}; rev=false, ntasks=1)
+
+Stable sort permutation of multi-word keys; see [`WordKeys`](@ref).
+"""
+function wordkeys_sortperm(w::Vector{NTuple{M,UInt64}}; rev::Bool=false, ntasks::Integer=1) where {M}
+    length(w) <= 1 && return collect(1:length(w))
+    return refine!(WordKeys{M}(w, rev), collect(1:length(w)), 0, Int(ntasks))
+end

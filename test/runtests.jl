@@ -3,6 +3,8 @@ using Test
 using Random
 using BitIntegers
 using DoubleFloats
+using MultiFloats
+using Quadmath
 
 const TYPES = (Int32, UInt32, Int64, UInt64, Float32, Float64)
 
@@ -262,6 +264,17 @@ end
         shuffle!(rng, bf)
         for v in (bi, bf), rev in (false, true), nt in (1, 8)
             @test same(v; rev, nt)
+        end
+        # Quadmath's Float128 and MultiFloats (2-4 limbs, Float64 and Float32).
+        q = Float128.(randn(rng, 20_000)) .* Float128(10) .^ rand(rng, -30:30, 20_000)
+        append!(q, Float128[0.0, -0.0, Inf, -Inf, NaN, -NaN, 1, 1, -1])
+        shuffle!(rng, q)
+        @test all(same(q; rev, nt) for rev in (false, true), nt in (1, 8))
+        for T in (Float64x2, Float64x3, Float64x4, Float32x2, Float32x3)
+            v = T.(randn(rng, 10_000)) .+ T.(randn(rng, 10_000)) .* T(1e-12)
+            append!(v, T[0.0, -0.0, Inf, -Inf, NaN, 1, 1, -1])
+            shuffle!(rng, v)
+            @test all(same(v; rev, nt) for rev in (false, true), nt in (1, 8))
         end
         for T in (Double64, Double32)
             v = T.(randn(rng, 2 * 10^4)) .+ T.(randn(rng, 2 * 10^4)) .* T(1e-10)
