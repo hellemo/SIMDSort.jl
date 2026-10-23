@@ -1,6 +1,8 @@
 using SIMDQuickSort
 using Test
 using Random
+using BitIntegers
+using DoubleFloats
 
 const TYPES = (Int32, UInt32, Int64, UInt64, Float32, Float64)
 
@@ -225,6 +227,38 @@ end
         for n in 0:100
             v = rand(rng, tricky, n)
             @test simdsortperm(v) == sortperm(v) && isequal(simdsort(v; rev=true), sort(v; rev=true))
+        end
+    end
+
+    @testset "wide and arbitrary-precision numbers" begin
+        same(v; rev=false, nt=1) = simdsortperm(v; rev, ntasks=nt) == sortperm(v; rev) &&
+                                   isequal(simdsort(v; rev, ntasks=nt), sort(v; rev))
+        for T in (Int128, UInt128, Int256, UInt256, Int512, UInt1024)
+            for v in (rand(rng, T, 2 * 10^4), rand(rng, T(0):T(5), 5000),
+                      rand(rng, [typemin(T), typemax(T), zero(T), one(T)], 1000), rand(rng, T, 7))
+                @test all(same(v; rev, nt) for rev in (false, true), nt in (1, 8))
+            end
+        end
+        bi = [big(rand(rng, Int128)) * big(rand(rng, Int128))^rand(rng, 0:3) * rand(rng, (-1, 1)) for _ in 1:5000]
+        append!(bi, big.(rand(rng, -3:3, 1000)))
+        bf = [BigFloat(randn(rng)) * big(10.0)^rand(rng, -40:40) for _ in 1:5000]
+        append!(bf, BigFloat[NaN, Inf, -Inf, 0.0, -0.0, 1.5, -1.5, 1.5])
+        append!(bf, [BigFloat(1.5, precision=64), BigFloat(-1.5, precision=512),
+                     BigFloat(-1.5000001, precision=512), BigFloat(2.0, precision=1000)])
+        shuffle!(rng, bf)
+        for v in (bi, bf), rev in (false, true), nt in (1, 8)
+            @test same(v; rev, nt)
+        end
+        for T in (Double64, Double32)
+            v = T.(randn(rng, 2 * 10^4)) .+ T.(randn(rng, 2 * 10^4)) .* T(1e-10)
+            append!(v, T[0.0, -0.0, Inf, -Inf, 1, 1, -1])
+            shuffle!(rng, v)
+            @test all(same(v; rev, nt) for rev in (false, true), nt in (1, 8))
+            # DoubleFloats' isless is no total order with NaNs; NaNs go last.
+            w = [v; T(NaN)]
+            shuffle!(rng, w)
+            r = simdsort(w)
+            @test isnan(r[end]) && issorted(r[1:end-1]) && sort(filter(!isnan, w)) == r[1:end-1]
         end
     end
 

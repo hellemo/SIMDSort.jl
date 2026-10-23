@@ -45,6 +45,7 @@ struct ByteKeys <: KeySource
     ptr::Vector{Ptr{UInt8}}
     len::Vector{Int}
     rev::Bool
+    lentie::Bool    # byte-equal keys of different length differ (strings)
 end
 
 # The bytes of a String, or the name of a Symbol (NUL-free, NUL-terminated). The
@@ -61,7 +62,7 @@ function ByteKeys(v::AbstractVector, rev::Bool, ntasks::Int)
             ptr[i], len[i] = bytes_of(v[i])
         end
     end
-    return ByteKeys(ptr, len, rev)
+    return ByteKeys(ptr, len, rev, true)
 end
 
 @inline exhausted(ks::ByteKeys, i::Int, off::Int) = off >= 8 * @inbounds(ks.len[i])
@@ -92,7 +93,7 @@ end
 # Strings equal as zero-padded bytes differ only in length; `isless` puts the
 # shorter first.
 finish_ties!(ks::KeySource, perm) = perm
-finish_ties!(ks::ByteKeys, perm) =
+finish_ties!(ks::ByteKeys, perm) = !ks.lentie ? perm :
     sort!(perm; by = i -> @inbounds(ks.len[i]), rev = ks.rev, alg = Base.Sort.MergeSort)
 
 # Full comparison of keys a and b from bit `off` on, for small runs: -1, 0 or 1.
@@ -102,7 +103,7 @@ function cmp_from(ks::KeySource, a::Int, b::Int, off::Int)
         x != y && return x < y ? -1 : 1
         off += 56
     end
-    ks isa ByteKeys || return 0
+    (ks isa ByteKeys && ks.lentie) || return 0
     la, lb = ks.len[a], ks.len[b]
     la == lb && return 0
     return (la < lb) != ks.rev ? -1 : 1

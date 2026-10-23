@@ -1,0 +1,141 @@
+# Other key types on the windowed sort of perm.jl (docs/DESIGN.md §8): fixed-size
+# integers wider than 64 bits (Int128, UInt128, BitIntegers.jl types), and
+# BigInt and BigFloat through order-preserving byte encodings.
+
+# --- wide fixed-size integers --------------------------------------------------
+
+struct WideIntKeys{T,U} <: KeySource
+    v::Vector{T}
+    rev::Bool
+end
+WideIntKeys(v::Vector{T}, rev::Bool) where {T} = WideIntKeys{T,typeof(unsigned(zero(T)))}(v, rev)
+
+keywidth(::WideIntKeys{T}) where {T} = 8sizeof(T)
+@inline exhausted(ks::WideIntKeys, i::Int, off::Int) = off >= keywidth(ks)
+
+@inline function keybits(ks::WideIntKeys{T,U}, i::Int, off::Int, K::Int) where {T,U}
+    W = 8sizeof(T)
+    x = @inbounds ks.v[i]
+    u = x % U
+    T <: Signed && (u ⊻= one(U) << (W - 1))
+    ks.rev && (u = ~u)
+    off >= W && return zero(UInt64)
+    # Bits [off, off + K) of the W-bit key, zero beyond the end.
+    if off + K <= W
+        return ((u >> (W - off - K)) % UInt64) & ((one(UInt64) << K) - one(UInt64))
+    else
+        return ((u << (off + K - W)) % UInt64) & ((one(UInt64) << K) - one(UInt64))
+    end
+end
+
+# Fixed-size primitive integers wider than 64 bits.
+iswideint(::Type{T}) where {T} =
+    T <: Union{Signed,Unsigned} && isbitstype(T) && sizeof(T) > 8 && isprimitivetype(T)
+
+function simdsortperm(v::Vector{T}; rev::Bool=false, ntasks::Integer=1) where {T<:Union{Signed,Unsigned}}
+    iswideint(T) || return sortperm(v; rev)
+    length(v) <= 1 && return collect(1:length(v))
+    return refine!(WideIntKeys(v, rev), collect(1:length(v)), 0, Int(ntasks))
+end
+
+function simdsort!(v::Vector{T}; rev::Bool=false, ntasks::Integer=1) where {T<:Union{Signed,Unsigned}}
+    iswideint(T) || return sort!(v; rev)
+    copyto!(v, v[simdsortperm(v; rev, ntasks)])
+    return v
+end
+
+# --- byte encodings ------------------------------------------------------------
+
+# Keys given as one byte string each, stored back to back in `bytes`; `lentie`
+# is false because equal values have identical encodings.
+function encoded_keys(bytes::Vector{UInt8}, start::Vector{Int}, rev::Bool)
+    n = length(start) - 1
+    base = pointer(bytes)
+    ptr = [base + start[i] for i in 1:n]
+    len = [start[i+1] - start[i] for i in 1:n]
+    return ByteKeys(ptr, len, rev, false)
+end
+
+@inline put64!(bytes::Vector{UInt8}, pos::Int, x::UInt64) =
+    GC.@preserve bytes unsafe_store!(Ptr{UInt64}(pointer(bytes, pos + 1)), hton(x))
+
+const LIMB = Base.GMP.Limb
+
+# BigInt: an 8-byte header 2^63 + nlimbs (≥ 0) or 2^63 - nlimbs (< 0), then the
+# magnitude limbs from the most significant, complemented for negative numbers.
+# A longer magnitude is larger (positive) or smaller (negative); equal lengths
+# compare limb by limb.
+function encode(v::Vector{BigInt})
+    n = length(v)
+    start = Vector{Int}(undef, n + 1)
+    start[1] = 0
+    for i in 1:n
+        start[i+1] = start[i] + 8 + 8 * abs(v[i].size)
+    end
+    bytes = Vector{UInt8}(undef, start[end])
+    for i in 1:n
+        x = v[i]
+        k = Int(abs(x.size))
+        neg = x.size < 0
+        put64!(bytes, start[i], neg ? (UInt64(1) << 63) - UInt64(k) : (UInt64(1) << 63) + UInt64(k))
+        GC.@preserve x for j in 1:k
+            limb = UInt64(unsafe_load(x.d, k - j + 1))
+            put64!(bytes, start[i] + 8j, neg ? ~limb : limb)
+        end
+    end
+    return bytes, start
+end
+
+# BigFloat: an 8-byte class/exponent header, then the significand as L limbs
+# (L for the largest precision in the vector), aligned at the top bit and
+# complemented for negative numbers. Equal lengths make the complemented
+# encodings compare correctly.
+#   -Inf: 1, negative: 2^62 - (E + 2^40), -0: 2^62, +0: 2^62 + 1,
+#   positive: 2^62 + 2 + (E + 2^40), +Inf: 2^63, NaN: 2^64 - 1
+# with E the binary exponent (x = 0.1xxx₂ × 2^E).
+function encode(v::Vector{BigFloat})
+    n = length(v)
+    L = maximum(x -> cld(precision(x), 64), v; init = 1)
+    w = 8 + 8L
+    bytes = zeros(UInt8, n * w)
+    start = collect(0:w:n*w)
+    z = BigInt()
+    for i in 1:n
+        x = v[i]
+        pos = start[i]
+        if isnan(x)
+            put64!(bytes, pos, typemax(UInt64))
+        elseif isinf(x)
+            put64!(bytes, pos, x > 0 ? UInt64(1) << 63 : UInt64(1))
+        elseif iszero(x)
+            put64!(bytes, pos, (UInt64(1) << 62) + UInt64(!signbit(x)))
+        else
+            e = ccall((:mpfr_get_z_2exp, Base.MPFR.libmpfr), Clong, (Ref{BigInt}, Ref{BigFloat}), z, x)
+            p = precision(x)
+            E = Int(e) + p                     # x = (z / 2^p) × 2^E, |z| in [2^(p-1), 2^p)
+            neg = x < 0
+            put64!(bytes, pos, neg ? (UInt64(1) << 62) - UInt64(E + (1 << 40)) :
+                                     (UInt64(1) << 62) + 2 + UInt64(E + (1 << 40)))
+            m = abs(z) << (64L - p)            # top-aligned in L limbs
+            k = Int(abs(m.size))
+            GC.@preserve m for j in 1:L
+                limb = j <= k ? UInt64(unsafe_load(m.d, k - j + 1)) : zero(UInt64)
+                put64!(bytes, pos + 8j, neg ? ~limb : limb)
+            end
+        end
+    end
+    return bytes, start
+end
+
+function simdsortperm(v::Vector{T}; rev::Bool=false, ntasks::Integer=1) where {T<:Union{BigInt,BigFloat}}
+    length(v) <= 1 && return collect(1:length(v))
+    bytes, start = encode(v)
+    GC.@preserve bytes begin
+        return refine!(encoded_keys(bytes, start, rev), collect(1:length(v)), 0, Int(ntasks))
+    end
+end
+
+function simdsort!(v::Vector{T}; rev::Bool=false, ntasks::Integer=1) where {T<:Union{BigInt,BigFloat}}
+    copyto!(v, v[simdsortperm(v; rev, ntasks)])
+    return v
+end

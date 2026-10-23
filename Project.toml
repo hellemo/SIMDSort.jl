@@ -7,16 +7,26 @@ license = "MIT"
 [deps]
 SIMD = "fdea26ae-647d-5447-a871-4b548cad5224"
 
+[weakdeps]
+DoubleFloats = "497a8b3b-efae-58df-a0af-a86822472b78"
+
+[extensions]
+SIMDQuickSortDoubleFloatsExt = "DoubleFloats"
+
 [sources]
 SIMD = {url = "https://github.com/hellemo/SIMD.jl", rev = "permute-compress"}
 
 [compat]
+BitIntegers = "0.3"
+DoubleFloats = "1"
 SIMD = "3.8"
 julia = "1.10"
 
 [extras]
+BitIntegers = "c3b6d118-76ef-56ca-8cc7-ebb389d030a1"
+DoubleFloats = "497a8b3b-efae-58df-a0af-a86822472b78"
 Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
 [targets]
-test = ["Random", "Test"]
+test = ["BitIntegers", "DoubleFloats", "Random", "Test"]
