@@ -41,6 +41,19 @@ function unmap_keys!(k::AbstractVector{S}, ::Type{T}, rev::Bool) where {S, T}
     return k
 end
 
+# Apply `f!` to `ntasks` contiguous chunks of `k` concurrently.
+function foreach_chunk(f!::F, k::AbstractVector, ntasks::Integer) where {F}
+    n = length(k)
+    if ntasks <= 1 || n < 1 << 16
+        f!(k)
+    else
+        @sync for c in Iterators.partition(eachindex(k), cld(n, ntasks))
+            Threads.@spawn f!(view(k, c))
+        end
+    end
+    return nothing
+end
+
 """
     nan_partition!(v, rev) -> UnitRange
 

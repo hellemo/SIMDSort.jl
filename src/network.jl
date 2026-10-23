@@ -155,7 +155,7 @@ end
 lanes(::Type{T}) where {T} = 32 ÷ sizeof(T)   # 256-bit vectors
 
 # The base case uses up to MAXROWS registers: 128 × 32-bit or 64 × 64-bit keys.
-const MAXROWS = 16
+const MAXROWS = 32
 basecase_max(::Type{T}) where {T} = MAXROWS * lanes(T)
 
 """
@@ -172,6 +172,8 @@ scratch. The smallest network with R ∈ {N, 2N, 4N} rows that fits is used.
         netsort!(p, n, buf, Val(N), Val(N))
     elseif n <= 2N * N
         netsort!(p, n, buf, Val(min(2N, MAXROWS)), Val(N))
+    elseif n <= 4N * N && 4N <= MAXROWS
+        netsort!(p, n, buf, Val(min(4N, MAXROWS)), Val(N))
     else
         netsort!(p, n, buf, Val(MAXROWS), Val(N))
     end

@@ -74,8 +74,9 @@ range is sorted by `Base.sort!` (introsort fallback [Mus97]).
 
 In place and bidirectional, as in [Bra17]:
 
-1. Load $U$ vectors from each end of the range into registers. This creates $UN$
-   free slots at each end.
+1. Copy $U$ vectors from each end of the range into a small buffer. This creates
+   $UN$ free slots at each end. [Bra17] keeps these vectors in registers; a buffer
+   leaves the registers free for a larger unroll factor.
 2. Main loop, while at least $UN$ unread keys remain: load the next $U$ vectors from
    the side with **less free space** (left free space $=$ read pointer $-$ write
    pointer) [Bra17, line 18]. For each vector $x$:
@@ -88,7 +89,7 @@ In place and bidirectional, as in [Bra17]:
    tail, as described below.
 
 **Why full-width stores are safe.** Let $g_L, g_R$ be the free space at each end.
-While $2U$ vectors are held, $g_L + g_R = 2UN$, so the side we load from has
+While $2U$ vectors are set aside, $g_L + g_R = 2UN$, so the side we load from has
 $g \le UN$ and has $g + UN \ge UN$ after the load; the other side has at least $UN$
 too. A full-width store at either end therefore only writes free slots.
 [Bra17] uses AVX-512 masked compress-stores (`vpcompress`) instead. On AVX2 those
@@ -96,26 +97,33 @@ are emulated slowly, while `vpartition` + `vstore` costs one table lookup, one
 `vpermd` and two plain stores.
 
 **Tail.** When fewer than $N$ unread keys remain:
-1. copy them to a small buffer;
-2. the free region $[\ell, r)$ is now contiguous and holds exactly the held vectors
-   plus the tail;
-3. store the held vectors directly while at least two remain, since then
-   $r - \ell \ge 2N$ and the two store windows are disjoint;
-4. partition the last vector and the tail through the buffer, then copy them to
-   their exact positions.
+1. append them to the buffer;
+2. the free region $[\ell, r)$ is now contiguous and exactly as large as the
+   buffer contents;
+3. partition buffer vectors with full-width stores while at least $2N$ keys
+   remain, since then $r - \ell \ge 2N$ and the two store windows are disjoint;
+4. place the last $< 2N$ keys one by one, without branches: each key is written to
+   both $\ell$ and $r-1$, and only the end it belongs to advances. A write to the
+   wrong end only touches a free slot, which a later key overwrites.
 
 [WBGS22, §2.1] also uses a buffer for the final keys so that no load or store goes
 past the range.
 
-**Unrolling.** [WBGS22] unrolls by 4. $U$ is tuned by measurement (step 5 of the
-plan).
+**Unrolling and the side choice.** [WBGS22] unrolls by 4. Here $U = 8$ measured
+best on AVX2 (in cache: 0.137, 0.124 and 0.119 ns/key for $U$ = 4, 8, 16 with 32-bit
+keys; 0.27 ns/key for all $U$ at $2^{26}$ keys, where the loop is
+bandwidth-bound). The side to load from is data dependent and mispredicts often.
+A branch-free version (`ifelse` on the read positions) was measured and rejected:
+it chains each load address to the previous vectors' popcounts and was slower,
+while with the branch the loads can run ahead speculatively.
 
 ## 4. Pivot [WBGS22 §2.2]
 
 [WBGS22] samples nine 64-byte chunks at random positions, takes lane-wise medians
 of three, and reduces them. Here:
 - 9 vectors are loaded at pseudo-random offsets, from an xorshift generator seeded
-  per sort;
+  per sort. Each offset in $[0, n-N]$ is $\lfloor s \cdot (n-N+1) / 2^{64} \rfloor$, a
+  multiply-high instead of a 64-bit division;
 - lane-wise median of three gives 3 vectors, and a further median of three gives
   1 vector of $N$ lane medians;
 - its $N$ lanes are sorted and the middle one is the pivot.
@@ -128,7 +136,9 @@ limit bounds the remaining risk.
 
 Ranges of at most $R \cdot N$ keys are sorted with a vectorized sorting network
 over an $R \times N$ matrix: $R$ registers (rows) of $N$ lanes (columns), with
-$R \in \{N, 2N, 4N\}$ chosen as the smallest that fits. As in [WBGS22, §2.3], the
+$R \in \{N, 2N, 4N\}$ (at most 32) chosen as the smallest that fits: up to 256
+32-bit or 128 64-bit keys. With 16 AVX2 registers the 32-row networks spill, but
+they still measured 2–6% faster overall than a 128/64-key base case. As in [WBGS22, §2.3], the
 keys are copied into a buffer, padded with `typemax`, sorted in registers, and the
 first $n$ are copied back.
 
@@ -136,6 +146,8 @@ first $n$ are copied back.
    registers. Every compare-exchange is one vector `min` and one `max` and sorts
    all $N$ columns at once [WBGS22 §3]. We use Batcher's odd-even merge sort
    [Bat68] (63 compare-exchanges for $R = 16$; [WBGS22] uses Green's 60).
+   Sorting 128 32-bit keys takes about 80 ns (0.6 ns/key), against 15 ns/key for
+   insertion sort.
 2. **Merging columns without transposing** [WBGS22 §3]. Number the elements
    column-major, $i = c \cdot R + \rho$ (column $c$, row $\rho$), so each column
    is a sorted run of length $R$. Bitonic merges [Bat68] combine runs of length
@@ -159,7 +171,7 @@ first $n$ are copied back.
    merges. We accept one transpose per base case for simpler code generation.
 
 All networks are generated at compile time (`@generated`), so the base case is
-straight-line code with constant shuffles. Ranges of at most 16 keys use insertion
+straight-line code with constant shuffles. Ranges of at most 8 keys use insertion
 sort.
 
 ## 6. Deviations and choices not taken from the papers
@@ -170,5 +182,13 @@ sort.
   two compress-stores. This is the AVX2-friendly form of [Bra17, `partition_vec`].
 - The base case ends with a transpose (§5.3).
 - Batcher's network sorts the columns instead of Green's.
-- Parallelism (optional `ntasks`) spawns tasks for the two sides of large
-  partitions. Parallel partitioning of the top levels is not done.
+- Parallelism (`ntasks > 1`) is our own addition. The papers sort with one thread;
+  [WBGS22 §4] discusses multi-core scaling.
+  - Ranges above $2^{16}$ keys hand their smaller side to a new task, with a share
+    of `ntasks` proportional to its size.
+  - Ranges above $2^{20}$ keys are partitioned in parallel, because the serial top
+    partitions are otherwise the critical path. Each task partitions one chunk in
+    place. Then the keys $> p$ that lie below the global boundary $m = \sum_i m_i$
+    are swapped with the keys $\le p$ above it. The two sets have the same size
+    $X$, and each task swaps an equal slice of ranks $[jX/k, (j+1)X/k)$.
+  - The key maps run in parallel chunks.

@@ -81,7 +81,7 @@ end
 
     @testset "partition! $T U=$U" for T in (Int32, Int64), U in (1, 2, 4)
         N = SIMDQuickSort.lanes(T)
-        buf = Vector{T}(undef, 2N)
+        buf = Vector{T}(undef, (2U + 1) * N)
         @test all(Iterators.product(2U*N:2U*N+200, 1:6)) do (n, t)
             a = t <= 2 ? rand(rng, T(-3):T(3), n) : rand(rng, T, n)
             piv = t == 3 ? maximum(a) : t == 4 ? minimum(a) : a[rand(rng, 1:n)]
@@ -99,6 +99,35 @@ end
             end
         end
         @test check(gen(T, :uniform, 10^6, rng))
+    end
+
+    @testset "ntasks $T" for T in TYPES
+        for dist in (:uniform, :few, :equal, :sorted, :special), rev in (false, true)
+            v = gen(T, dist, 3 * 10^6 + 17, rng)
+            @test isequal(simdsort(v; rev, ntasks=8), sort(v; rev))
+        end
+    end
+
+    @testset "ppartition! $T" for T in (Int32, Int64)
+        for n in (2^20 + 1, 3 * 10^6), ntasks in (2, 3, 8), dist in (:uniform, :few, :sorted, :reversed)
+            a = gen(T, dist, n, rng)
+            piv = a[rand(rng, 1:n)]
+            b = copy(a)
+            m = GC.@preserve b SIMDQuickSort.ppartition!(pointer(b), n, piv, ntasks)
+            @test all(<=(piv), view(b, 1:m)) && all(>(piv), view(b, m+1:n))
+            @test sort!(b) == sort!(a)
+        end
+    end
+
+    @testset "depth limit" begin
+        # A zero depth budget sends every range to the fallback.
+        v = rand(rng, Int32, 10^4)
+        w = copy(v)
+        buf = SIMDQuickSort.scratch(Int32)
+        GC.@preserve w buf SIMDQuickSort.qsort!(pointer(w), length(w), pointer(buf), 0, UInt64(1))
+        @test w == sort(v)
+        GC.@preserve w SIMDQuickSort.pqsort!(pointer(v), length(v), 1, UInt64(1), 4)
+        @test v == sort(w)
     end
 
     @testset "fallback" begin
