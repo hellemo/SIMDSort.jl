@@ -63,32 +63,31 @@ x86-simd-sort and vqsort are called through the C shim in ChapelSort.jl's
 
 | case | Base.sort! (1 thr) | ChapelSort.jl psort! (1 thr) | ChapelSort.jl psort! (8 thr) | SIMDQuickSort.jl (1 thr) | SIMDQuickSort.jl (8 thr) | x86-simd-sort (1 thr) | x86-simd-sort (8 thr) | Highway vqsort (1 thr) |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| UInt64, 2^27 | 3.196 | 1.483 | **0.323** | 1.459 | 0.474 | 1.998 | 0.587 | 1.671 |
-| Int64, 2^26 | 1.532 | 0.866 | **0.188** | 0.654 | 0.196 | 0.832 | 0.250 | 0.759 |
-| Float64 (randn), 2^26 | 1.482 | 1.031 | 0.216 | 0.607 | 0.192 | 0.566 | **0.184** | 0.807 |
-| UInt32, 2^26 | 0.510 | 0.463 | 0.095 | 0.302 | **0.093** | 0.332 | 0.100 | 0.310 |
-| Int32, 2^26 | 0.515 | 0.480 | 0.115 | 0.307 | **0.093** | 0.328 | 0.101 | 0.306 |
-| Float32 (randn), 2^26 | 0.714 | 0.519 | 0.108 | 0.333 | 0.097 | 0.325 | **0.097** | 0.330 |
-| UInt64 in 0:1000, 2^26 | 0.079 | 0.084 | 0.030 | 0.065 | **0.021** | 0.325 | 0.139 | 0.276 |
-| UInt64, 1000 random values, 2^26 | 1.668 | 0.975 | **0.132** | 0.298 | 0.149 | 0.331 | 0.136 | 0.273 |
-| UInt64 sorted, 2^26 | 0.029 | 0.029 | **0.009** | 0.027 | 0.027 | 0.985 | 0.275 | 0.733 |
-| UInt64 reversed, 2^26 | 0.054 | 0.057 | **0.020** | 0.052 | 0.052 | 0.993 | 0.272 | 0.722 |
-| Int32, 2^20 | 0.005 | 0.007 | 0.002 | 0.003 | **0.002** | 0.003 | 0.002 | 0.003 |
+| UInt64, 2^27 | 3.226 | 1.496 | **0.345** | 1.453 | 0.518 | 1.983 | 0.612 | 1.634 |
+| Int64, 2^26 | 1.608 | 0.860 | **0.192** | 0.633 | 0.205 | 0.825 | 0.249 | 0.749 |
+| Float64 (randn), 2^26 | 1.539 | 1.006 | 0.227 | 0.609 | 0.189 | 0.570 | **0.185** | 0.771 |
+| UInt32, 2^26 | 0.556 | 0.449 | 0.101 | 0.301 | **0.095** | 0.323 | 0.104 | 0.304 |
+| Int32, 2^26 | 0.544 | 0.482 | 0.111 | 0.303 | **0.092** | 0.329 | 0.104 | 0.304 |
+| Float32 (randn), 2^26 | 0.758 | 0.497 | 0.115 | 0.316 | 0.099 | 0.320 | **0.097** | 0.320 |
+| UInt64 in 0:1000, 2^26 | 0.078 | 0.083 | 0.029 | 0.063 | **0.023** | 0.323 | 0.142 | 0.270 |
+| UInt64, 1000 random values, 2^26 | 1.701 | 1.023 | **0.132** | 0.290 | 0.144 | 0.326 | 0.141 | 0.276 |
+| UInt64 sorted, 2^26 | 0.028 | 0.029 | **0.008** | 0.026 | 0.026 | 0.990 | 0.276 | 0.740 |
+| UInt64 reversed, 2^26 | 0.055 | 0.056 | **0.020** | 0.053 | 0.053 | 1.047 | 0.278 | 0.703 |
+| Int32, 2^20 | 0.006 | 0.007 | 0.002 | 0.003 | **0.001** | 0.003 | 0.002 | 0.003 |
 
 - **One thread:**
-  - fastest of all measured sorts for `Int64`, `UInt64`, `UInt32`, small key
-    ranges, and sorted/reversed inputs;
-  - level with vqsort for `Int32` (0.307 vs 0.306 s);
-  - within 3% of the C++ sorts for `Float32`;
-  - behind on `Float64` (x86-simd-sort 7% faster, best 0.566 vs 0.607 s and
-    median 0.590 vs 0.615 s) and on 1000 values spread over the whole `UInt64`
-    range (vqsort 9% faster);
-  - 1.7–2.4× faster than Base on random keys (5.6× with 1000 distinct values).
+  - fastest of all measured sorts for `Int64`, `UInt64`, `UInt32`, `Float32`,
+    small key ranges, and sorted/reversed inputs;
+  - level with vqsort for `Int32` (0.303 vs 0.304 s);
+  - behind on `Float64`: x86-simd-sort is 7% faster (0.570 vs 0.609 s);
+  - behind on 1000 values spread over the whole `UInt64` range: vqsort is 5%
+    faster (0.276 vs 0.290 s);
+  - 1.8–5.9× faster than Base.
 - **Eight threads:**
   - fastest for `Int32`, `UInt32` and small key ranges;
-  - level with x86-simd-sort for `Float32`; 4% behind it for `Float64`;
+  - within 2% of x86-simd-sort for `Float32` and `Float64`;
   - ChapelSort's parallel radix sort leads for 64-bit integers (`UInt64` at
-    2^27: 0.323 vs 0.474 s; `Int64`: 0.188 vs 0.196 s), wide-range duplicates
+    2^27: 0.345 vs 0.518 s; `Int64`: 0.192 vs 0.205 s), wide-range duplicates
     and presorted inputs.
 
 [docs/DESIGN.md §7](docs/DESIGN.md) has the profile breakdown, per-level costs,

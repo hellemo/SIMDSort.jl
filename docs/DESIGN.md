@@ -91,8 +91,10 @@ sort(a[lo:hi], depth):
     while n > NBASE:
         if depth == 0: heapsort fallback (Base.sort!), return      [Mus97]
         p = choose_pivot(a[lo:hi])            # always one of the keys
-        m = partition(a[lo:hi], p)            # a[lo:m-1] ≤ p < a[m:hi]
-        if dup: a = partition(a[lo:m-1], prev(p))   # a[a:m-1] all equal p: done
+        if dup:                               # many keys equal p in the sample
+            (a, m) = partition3(a[lo:hi], p)  # < p | = p (done) | > p
+        else:
+            m = partition(a[lo:hi], p)        # a[lo:m-1] ≤ p < a[m:hi]
         if m > hi:                            # right side empty
             (mn, mx) = extrema(a[lo:hi])
             if mn == mx: return               # all keys equal
@@ -108,10 +110,17 @@ That case is handled as in [WBGS22, Alg. 1]: a vector min/max scan detects range
 of equal keys, which are done, and otherwise the minimum is used as the pivot, which
 guarantees progress.
 
-**Blocks of equal keys** are split off earlier when the pivot sample suggests
-them: if at least $N$ of the $9N$ sampled keys equal the pivot, the left side is
-partitioned again with the next smaller key (`x - 1`, or `prevfloat`), and the
-block equal to the pivot is excluded from recursion. This is our addition.
+**Blocks of equal keys** are split off when the pivot sample suggests them: if at
+least $N$ of the $9N$ sampled keys equal the pivot, a three-way partition (§3)
+puts the keys below the pivot left and those above it right. The block of keys
+equal to the pivot is done and excluded from recursion. This is our addition.
+
+- For ranges large enough for the parallel partition (§6), two parallel two-way
+  passes are used instead, because the three-way pass is serial: one around the
+  pivot, then one of the left side around the next smaller key (`x - 1`, or
+  `prevfloat`).
+- Triggering it on fewer equal samples (2 or 3 of $9N$) cost random inputs up to
+  5%.
 
 Recursing on the smaller side bounds the stack at
 $\log_2 n$ frames. The depth limit is $2\log_2 n + 4$ [WBGS22, §2.2]; past it the
@@ -155,6 +164,30 @@ are emulated slowly, while `vpartition` + `vstore` costs one table lookup, one
 
 [WBGS22, §2.1] also uses a buffer for the final keys so that no load or store goes
 past the range.
+
+**Three-way partition.** Used when the pivot sample shows many duplicates (§2).
+It follows the same scheme as the two-way partition, but keys equal to the pivot
+are never stored. Each vector is written twice:
+- keys $< p$, compressed to the front, at $\ell$;
+- keys $> p$, moved to the back, ending at $r$.
+
+Dropped keys only add free space, so the argument for full-width stores still
+holds. At the end the region between the two sides, exactly as long as the
+number of dropped keys, is filled with the pivot value. Floats lose the sign of
+equal zeros there, which `order_zeros!` repairs (§1).
+
+For 32-bit keys, the two stores need two `vpartition`s. For 4-lane (64-bit)
+keys, one 256-entry table indexed by both masks (4 bits each) gives a
+permutation that orders the vector as $[< p \mid = p \mid > p]$, so a single
+`vpermd` serves both stores. The cost relative to the two-way partition:
+
+| | in cache ($2^{14}$ keys) | out of cache ($2^{22}$ keys) |
+|---|---:|---:|
+| `Int32` | 1.16× | 1.35× |
+| `Int64` | 1.13× | 1.40× |
+
+It replaces a two-way pass plus a second pass over the left side, about 1.5
+passes.
 
 **Prefetch.** For ranges larger than 2 MB (about the L2 size), each iteration
 issues a software prefetch (`llvm.prefetch`) for the cache lines 512 keys ahead
@@ -353,7 +386,8 @@ separate processes on this laptop drift by ±5–10%.
 | `UInt32` (two key-map passes) | closed: native unsigned kernels, 0.353 → 0.318 s, equal to `Int32` (§1) |
 | Counting path vs ChapelSort's | closed: fused counting and parallel fill (§1) |
 | `Float64` vs x86-simd-sort, 1 thread | open, about 7% (best 0.566 vs 0.607 s, median 0.590 vs 0.615 s) |
-| `UInt64`, 1000 random values over the whole range, vs vqsort | open, about 9% |
+| `UInt64`, 1000 random values over the whole range, vs vqsort | about half closed by the three-way partition (§3): −5% on 1 thread, −7% on 8 |
+| 64-bit integers, 8 threads, vs ChapelSort's radix sort | open, structural (below) |
 | Sorted / reverse-sorted integer inputs | closed: detected before the key map, so as fast as Base |
 
 **`Float64`.** An earlier comparison that re-sorted one input repeatedly showed a
@@ -361,21 +395,53 @@ tie (0.620 vs 0.621 s). With the fresh-input protocol below, x86-simd-sort is
 consistently about 7% faster, in two full benchmark runs. Our partition kernel
 compiles to the minimal sequence (compare, movemask, table load, `vpermps`, two
 stores) and runs near the copy bandwidth out of cache. The difference is
-therefore elsewhere: in the base case (202 ns per 128 keys) or in the pass
-count. It is not investigated further here.
+therefore elsewhere. What was checked:
+- **Per vector:** the partition costs the same for all key types, about 0.83 ns
+  per vector in cache. 64-bit keys simply have half as many keys per vector.
+- **Small ranges:** close to their ideal cost (150 keys: 39 ns against 32 ns,
+  plus 13 ns for the pivot).
+- **Unroll factor:** changing it moves the total by less than 1%.
+- **Base case:** almost all of its cost is the network itself (189 ns for 128
+  keys). Copying, padding and the transpose are small. The 32-row network spills
+  registers: it costs 3.3× the 16-row one, for twice the keys. Splitting it into
+  two 64-key networks plus a bitonic merge was estimated at about 220 ns, so no
+  gain.
 
-**Why the wide-range duplicates case stays open.**
-- **Pass count:** the sort makes 12.4 partition passes over the data, against
-  $\log_2 1000 \approx 10$ ideal.
-- **Fixes tried, none better than ±1%:**
+The remaining 7% is probably a different small-range sort in x86-simd-sort. That
+cannot be confirmed under this package's clean-room rule.
+
+**Wide-range duplicates.**
+- **Pass count:** the sort made 12.4 partition passes over the data, against
+  $\log_2 1000 \approx 10$ ideal. Of these, 7.15 were ordinary passes, 3.05
+  passes where duplicates were detected, and 2.16 second passes splitting off the
+  equal block.
+- **The three-way partition (§3)** removes those second passes: −5% (1 thread)
+  and −7% (8 threads), about half the gap to vqsort.
+- **Fixes tried before it, none better than ±1%:**
   - a lower duplicate threshold (2 or 1 equal keys in $9N$ samples): up to 35%
     slower everywhere;
   - one partition with the next smaller key when the pivot is the maximum,
     instead of a min/max scan plus a partition;
-  - choosing the side to peel the equal block from by the sample counts.
+  - choosing the side to peel the equal block from by the sample counts;
+  - a read-only check for all-equal ranges when every sampled key equals the
+    pivot. It looked 5.6% faster when one input was re-sorted repeatedly, but
+    gave nothing with fresh inputs.
 - **Native `UInt64`** removes the map passes but costs as much in the kernels.
-- **Closing it** would need a vectorized three-way partition or a sample-sort
-  top level.
+
+**64-bit integers at 8 threads, against a radix sort.**
+- **Where the time goes:** for `UInt64` at $2^{27}$ keys (1 GB), 0.448 of the
+  0.495 s is the sort itself (the key maps take 2 × 24 ms). One parallel
+  top-level partition takes 34 ms, about 60 GB/s, and about 6.5 levels run out
+  of cache.
+- **What a radix sort does instead:** it makes a few counting and scatter
+  passes, and much less work per key, which wins once 8 threads share the memory
+  bandwidth.
+- **Prototype:** a parallel 8-bit radix distribution into a second array, then
+  this quicksort on each bucket, then a copy back. With a preallocated buffer it
+  was 12–16% faster: 0.484 against 0.549 s for `UInt64` at $2^{27}$, and 0.197
+  against 0.235 s for `Int64` at $2^{26}$. Allocating the 1 GB buffer on every
+  call (page faults) made it slower than the plain quicksort (0.632 s).
+- **Not adopted.** Even the best case stays well behind ChapelSort's 0.32 s.
 
 **Benchmark protocol.** `bench/bench.jl` draws a fresh input for every round (the
 same input for all methods within a round), runs the methods in a shuffled order
