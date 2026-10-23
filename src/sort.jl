@@ -165,66 +165,68 @@ const COUNT_MAXRANGE = 1 << 16
 const COUNT_MINN = 1 << 12
 
 """
-    counting_sort!(k, ntasks) -> Bool
+    counting_sort!(v, rev, ntasks) -> Bool
 
-If the keys of `k` span a range of at most `COUNT_MAXRANGE` values and fewer than
-`length(k) ÷ 4`, sort `k` by counting each value and writing the runs, and return
-`true`. Otherwise leave `k` unchanged and return `false`.
+If the integers in `v` span a range of at most `COUNT_MAXRANGE` values and fewer
+than `length(v) ÷ 4`, sort `v` (in reverse if `rev`) by counting each value and
+writing the runs, and return `true`. Otherwise leave `v` unchanged and return
+`false`. Works on the original values, so no key map is needed.
 """
-function counting_sort!(k::Vector{T}, ntasks::Int) where {T<:Signed}
-    n = length(k)
+function counting_sort!(v::Vector{T}, rev::Bool, ntasks::Int) where {T<:Integer}
+    n = length(v)
     n < COUNT_MINN && return false
     # A sample's range is at most the full range, so a wide sample rejects early
     # without scanning all keys.
-    smn = smx = k[1]
+    smn = smx = v[1]
     @inbounds for i in 1:(n ÷ 1024):n
-        smn = min(smn, k[i])
-        smx = max(smx, k[i])
+        smn = min(smn, v[i])
+        smx = max(smx, v[i])
     end
     Int128(smx) - Int128(smn) > COUNT_MAXRANGE && return false
-    mn, mx = GC.@preserve k vextrema(pointer(k), n)
+    mn, mx = GC.@preserve v vextrema(pointer(v), n)
     r = Int128(mx) - Int128(mn)
     (r <= COUNT_MAXRANGE && r < n ÷ 4) || return false
     r = Int(r)
     chunks = collect(Iterators.partition(1:n, cld(n, max(1, ntasks))))
     parts = Vector{Vector{Int}}(undef, length(chunks))
     if length(chunks) == 1
-        parts[1] = count_keys(k, chunks[1], mn, r)
+        parts[1] = count_keys(v, chunks[1], mn, r)
     else
         @sync for (i, c) in enumerate(chunks)
-            Threads.@spawn parts[i] = count_keys(k, c, mn, r)
+            Threads.@spawn parts[i] = count_keys(v, c, mn, r)
         end
     end
     counts = reduce(+, parts)
-    fill_runs!(k, counts, mn)
+    fill_runs!(v, counts, mn, rev)
     return true
 end
 
-# Counts of the keys k[c] .- mn, accumulated in four interleaved tables so that
+# Counts of the values v[c] .- mn, accumulated in four interleaved tables so that
 # runs of equal keys do not serialize on one counter.
-function count_keys(k::Vector{T}, c::UnitRange{Int}, mn::T, r::Int) where {T}
+function count_keys(v::Vector{T}, c::UnitRange{Int}, mn::T, r::Int) where {T}
     t = zeros(Int, r + 1, 4)
     i = first(c)
     @inbounds while i + 3 <= last(c)
-        t[(k[i] - mn) % Int + 1, 1] += 1
-        t[(k[i+1] - mn) % Int + 1, 2] += 1
-        t[(k[i+2] - mn) % Int + 1, 3] += 1
-        t[(k[i+3] - mn) % Int + 1, 4] += 1
+        t[(v[i] - mn) % Int + 1, 1] += 1
+        t[(v[i+1] - mn) % Int + 1, 2] += 1
+        t[(v[i+2] - mn) % Int + 1, 3] += 1
+        t[(v[i+3] - mn) % Int + 1, 4] += 1
         i += 4
     end
     @inbounds while i <= last(c)
-        t[(k[i] - mn) % Int + 1, 1] += 1
+        t[(v[i] - mn) % Int + 1, 1] += 1
         i += 1
     end
     return vec(sum(t; dims=2))
 end
 
-function fill_runs!(k::Vector{T}, counts::Vector{Int}, mn::T) where {T}
+function fill_runs!(v::Vector{T}, counts::Vector{Int}, mn::T, rev::Bool) where {T}
     j = 1
-    for (v, c) in enumerate(counts)
+    for d in (rev ? reverse(eachindex(counts)) : eachindex(counts))
+        c = counts[d]
         c == 0 && continue
-        fill!(view(k, j:j+c-1), mn + (v - 1) % T)
+        fill!(view(v, j:j+c-1), mn + (d - 1) % T)
         j += c
     end
-    return k
+    return v
 end

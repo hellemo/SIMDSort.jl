@@ -33,12 +33,13 @@ end
 function simdsort!(v::Vector{T}; rev::Bool=false, ntasks::Integer=1) where {T<:SortTypes}
     n = length(v)
     n <= 1 && return v
+    counting_sort!(v, rev, Int(ntasks)) && return v
     S = signedkey(T)
     GC.@preserve v begin
         p = Ptr{S}(pointer(v))
         k = unsafe_wrap(Array, p, n)
         foreach_chunk(k -> map_keys!(k, T, rev), k, ntasks)
-        presorted!(k) || counting_sort!(k, Int(ntasks)) || sort_keys!(p, n, Int(ntasks))
+        presorted!(k) || sort_keys!(p, n, Int(ntasks))
         foreach_chunk(k -> unmap_keys!(k, T, rev), k, ntasks)
     end
     return v
