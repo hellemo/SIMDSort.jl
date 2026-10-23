@@ -131,3 +131,116 @@ function partition!(p::Ptr{T}, n::Int, pivot::T, buf::Ptr{T}, ::Val{U},
     end
     return lw
 end
+
+# Three-way partition of one vector: keys < pivot go left, keys > pivot go right,
+# keys equal to the pivot are dropped (the caller refills them).
+@inline function part3(x::Vec{N,T}, pv::Vec{N,T}, p::Ptr{T}, lw::Int, rw::Int) where {N,T}
+    y, c = vpartition(x, x < pv)
+    vst(y, p, lw)
+    z, d = vpartition(x, !(x > pv))     # the keys > pivot come last
+    vst(z, p, rw - N)
+    return lw + c, rw - (N - d)
+end
+
+@inline part3_all(::Tuple{}, pv, p, lw, rw) = (lw, rw)
+@inline function part3_all(xs::Tuple, pv, p, lw, rw)
+    lw, rw = part3(first(xs), pv, p, lw, rw)
+    return part3_all(Base.tail(xs), pv, p, lw, rw)
+end
+
+"""
+    partition3!(p, n, pivot, buf, Val(U), Val(PF)=Val(false)) -> (a, b)
+
+Three-way version of `partition!`: afterwards the keys in `[0, a)` are below the
+pivot, those in `[b, n)` above it, and `[a, b)` holds the pivot value.
+"""
+function partition3!(p::Ptr{T}, n::Int, pivot::T, buf::Ptr{T}, ::Val{U},
+                     ::Val{PF}=Val(false)) where {T,U,PF}
+    N = lanes(T)
+    UN = U * N
+    pv = Vec{N,T}(pivot)
+    unsafe_copyto!(buf, p, UN)
+    unsafe_copyto!(buf + UN * sizeof(T), p + (n - UN) * sizeof(T), UN)
+    left, right = UN, n - UN
+    lw, rw = 0, n
+    # Dropped keys only add free space, so the argument of `partition!` holds.
+    while right - left >= UN
+        fromleft = left - lw <= rw - right
+        if fromleft
+            src = left
+            left += UN
+        else
+            right -= UN
+            src = right
+        end
+        if PF
+            pa = p + (fromleft ? left + PFDIST : right - PFDIST) * sizeof(T)
+            for c in 0:64:(UN * sizeof(T) - 1)
+                prefetch(pa + c)
+            end
+        end
+        lw, rw = part3_all(vldU(Val(U), Val(N), p, src), pv, p, lw, rw)
+    end
+    while right - left >= N
+        if left - lw <= rw - right
+            src = left
+            left += N
+        else
+            right -= N
+            src = right
+        end
+        lw, rw = part3(vld(Val(N), p, src), pv, p, lw, rw)
+    end
+    r = right - left
+    unsafe_copyto!(buf + 2UN * sizeof(T), p + left * sizeof(T), r)
+    m = 2UN + r
+    i = 0
+    # [lw, rw) holds at least as many slots as keys left in the buffer.
+    while m - i >= N && rw - lw >= 2N
+        lw, rw = part3(vld(Val(N), buf, i), pv, p, lw, rw)
+        i += N
+    end
+    while i < m
+        x = unsafe_load(buf, i + 1)
+        unsafe_store!(p, x, lw + 1)
+        unsafe_store!(p, x, rw)
+        lw += x < pivot
+        rw -= x > pivot
+        i += 1
+    end
+    k = lw
+    while k + N <= rw
+        vst(pv, p, k)
+        k += N
+    end
+    while k < rw
+        unsafe_store!(p, pivot, k + 1)
+        k += 1
+    end
+    return lw, rw
+end
+
+# 64-bit keys (4 lanes): one permutation, looked up by the < and > masks
+# together, orders a vector as [< pivot | = pivot | > pivot]; both stores use it.
+const P3TAB4 = let t = Int32[]
+    for code in 0:255
+        L, G = code & 15, code >> 4
+        lanes_lt = [i for i in 0:3 if (L >> i) & 1 == 1]
+        lanes_gt = [i for i in 0:3 if (G >> i) & 1 == 1 && (L >> i) & 1 == 0]
+        lanes_eq = [i for i in 0:3 if i ∉ lanes_lt && i ∉ lanes_gt]
+        for i in [lanes_lt; lanes_eq; lanes_gt]
+            push!(t, Int32(2i), Int32(2i + 1))
+        end
+    end
+    t
+end
+
+@inline function part3(x::Vec{4,T}, pv::Vec{4,T}, p::Ptr{T}, lw::Int, rw::Int) where {T}
+    L = bitmask(x < pv) % Int
+    G = bitmask(x > pv) % Int
+    idx = @inbounds vload(Vec{8,Int32}, P3TAB4, 8 * (L | (G << 4)) + 1)
+    y = reinterpret(Vec{4,T}, vpermute(reinterpret(Vec{8,Int32}, x), idx))
+    vst(y, p, lw)
+    vst(y, p, rw - 4)
+    return lw + count_ones(L), rw - count_ones(G)
+end

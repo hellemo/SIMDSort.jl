@@ -119,7 +119,17 @@ function pqsort!(p::Ptr{T}, n::Int, depth::Int, s::UInt64, ntasks::Int, total::I
             depth -= 1
             pivot, dup, s = choose_pivot(p, n, s)
             nt = clamp(round(Int, ntasks * n / total), 1, ntasks)
-            a, b = split!((p, n, x) -> part(p, n, x, pointer(buf), nt), p, n, pivot, dup)
+            if dup && nt > 1 && n > PPART_MIN && has_prev(pivot)
+                # The three-way partition is serial. For a range this large, two
+                # parallel partitions are faster: around the pivot, then the left
+                # side around the next smaller key, which splits off the keys
+                # equal to the pivot.
+                b = part(p, n, pivot, pointer(buf), nt)
+                a = b >= 2UNROLL * lanes(T) ? part(p, b, prevkey(pivot), pointer(buf), nt) : b
+            else
+                a, b = split!(p, n, pivot, dup, pointer(buf),
+                              (p, n, x) -> part(p, n, x, pointer(buf), nt))
+            end
             if a == n
                 # As in qsort!: the pivot is the maximum.
                 mn, mx = vextrema(p, n)

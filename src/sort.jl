@@ -75,20 +75,23 @@ end
     use_prefetch(T, n) ? partition!(p, n, pivot, buf, Val(UNROLL), Val(true)) :
                          partition!(p, n, pivot, buf, Val(UNROLL))
 
-"""
-    split!(partition, p, n, pivot, dup) -> (a, b)
+@inline partition3_auto!(p::Ptr{T}, n::Int, pivot::T, buf::Ptr{T}) where {T} =
+    use_prefetch(T, n) ? partition3!(p, n, pivot, buf, Val(UNROLL), Val(true)) :
+                         partition3!(p, n, pivot, buf, Val(UNROLL))
 
-Partition with `partition(p, n, pivot)`. Returns `(a, b)`: the keys in `[0, a)`
-are below the pivot, those in `[b, n)` above it, and those in `[a, b)` equal to
-it, so they are done. The equal block is only split off (by a second partition
-of the left side with the next smaller key) when `dup` is set; otherwise
-`a == b`.
 """
-@inline function split!(partition::F, p::Ptr{T}, n::Int, pivot::T, dup::Bool) where {F,T}
+    split!(p, n, pivot, dup, buf, partition) -> (a, b)
+
+Partition around `pivot`. Returns `(a, b)`: the keys in `[0, a)` are below the
+pivot (or equal to it if `a == b`), those in `[b, n)` above it, and those in
+`[a, b)` equal to it, so they are done. When `dup` is set (the sample suggests
+many keys equal to the pivot), one three-way pass splits off the equal block;
+otherwise `partition(p, n, pivot)` makes a two-way split and `a == b`.
+"""
+@inline function split!(p::Ptr{T}, n::Int, pivot::T, dup::Bool, buf::Ptr{T},
+                        partition::F) where {F,T}
+    dup && return partition3_auto!(p, n, pivot, buf)
     m = partition(p, n, pivot)
-    if dup && m >= 2UNROLL * lanes(T) && has_prev(pivot)
-        return partition(p, m, prevkey(pivot)), m
-    end
     return m, m
 end
 
@@ -106,7 +109,7 @@ function qsort!(p::Ptr{T}, n::Int, buf::Ptr{T}, depth::Int, s::UInt64) where {T}
         end
         depth -= 1
         pivot, dup, s = choose_pivot(p, n, s)
-        a, b = split!((p, n, x) -> partition_auto!(p, n, x, buf), p, n, pivot, dup)
+        a, b = split!(p, n, pivot, dup, buf, (p, n, x) -> partition_auto!(p, n, x, buf))
         if a == n
             # Nothing above the pivot: it is the maximum. Done if all keys are
             # equal; otherwise split off the copies of the minimum.

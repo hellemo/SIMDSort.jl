@@ -111,6 +111,24 @@ end
         end
     end
 
+    @testset "partition3! $T PF=$PF" for T in (Int32, Int64, UInt32, Float32, Float64), PF in (false, true)
+        N = SIMDQuickSort.lanes(T)
+        U = SIMDQuickSort.UNROLL
+        buf = SIMDQuickSort.scratch(T)
+        vals = T <: AbstractFloat ? T[-1, -0.0, 0.0, 1, 2] : T[1, 2, 3, 5]
+        @test all(Iterators.product(2U*N:2U*N+300, 1:3)) do (n, t)
+            a = t == 1 ? rand(rng, vals, n) : t == 2 ? rand(rng, T, n) : fill(vals[2], n)
+            piv = a[rand(rng, 1:n)]
+            b = copy(a)
+            x, y = GC.@preserve b buf SIMDQuickSort.partition3!(pointer(b), n, piv, pointer(buf),
+                                                                  Val(U), Val(PF))
+            # Equal keys are refilled with the pivot value, so for floats the
+            # signs of zeros may change; compare as numbers.
+            all(<(piv), view(b, 1:x)) && all(==(piv), view(b, x+1:y)) &&
+                all(>(piv), view(b, y+1:n)) && sort(b) == sort(a)
+        end
+    end
+
     @testset "ppartition! $T" for T in (Int32, Int64)
         for n in (2^20 + 1, 3 * 10^6), ntasks in (2, 3, 8), dist in (:uniform, :few, :sorted, :reversed)
             a = gen(T, dist, n, rng)
