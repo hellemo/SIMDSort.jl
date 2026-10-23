@@ -117,7 +117,7 @@ function pqsort!(p::Ptr{T}, n::Int, depth::Int, s::UInt64, ntasks::Int, total::I
     GC.@preserve buf begin
         while n > grain && depth > 0
             depth -= 1
-            pivot, dup, s = choose_pivot(p, n, s)
+            pivot, dup, s = choose_pivot(p, n, s, pointer(buf))
             nt = clamp(round(Int, ntasks * n / total), 1, ntasks)
             if dup && nt > 1 && n > PPART_MIN && has_prev(pivot)
                 # The three-way partition is serial. For a range this large, two

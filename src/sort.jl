@@ -41,6 +41,41 @@ function choose_pivot(p::Ptr{T}, n::Int, s::UInt64) where {T}
     return pivot, c >= N, s
 end
 
+# Ranges above this size take the exact median of a larger sample.
+# Measured: exact sample medians improve the split only slightly (20.8 → 20.1
+# passes for Float64 at 2^26 keys), but detect duplicates better.
+const BIGPIVOT_MINN = 1 << 18
+
+"""
+    choose_pivot(p, n, s, buf) -> (pivot, dup, s)
+
+For ranges above `BIGPIVOT_MINN` keys: the exact median of `basecase_max(T)` keys
+loaded as vectors from pseudo-random offsets, sorted with the base-case network
+in `buf`. `dup` is set when at least 1/9 of the sample equals the pivot.
+Otherwise as `choose_pivot(p, n, s)`.
+"""
+function choose_pivot(p::Ptr{T}, n::Int, s::UInt64, buf::Ptr{T}) where {T}
+    n > BIGPIVOT_MINN || return choose_pivot(p, n, s)
+    N = lanes(T)
+    m = basecase_max(T)
+    for j in 0:N:m-1
+        x, s = sample(p, n, s)
+        vst(x, buf, j)
+    end
+    small_sort!(buf, m, buf)
+    h = m ÷ 2
+    pivot = unsafe_load(buf, h + 1)
+    lo = h
+    while lo > 0 && unsafe_load(buf, lo) == pivot
+        lo -= 1
+    end
+    hi = h + 1
+    while hi < m && unsafe_load(buf, hi + 1) == pivot
+        hi += 1
+    end
+    return pivot, 9 * (hi - lo) >= m, s
+end
+
 # The largest key below `x`, if there is one (floats: -0.0 and 0.0 count as equal).
 @inline has_prev(x::Integer) = x != typemin(x)
 @inline has_prev(x::AbstractFloat) = x != typemin(x)
@@ -108,7 +143,7 @@ function qsort!(p::Ptr{T}, n::Int, buf::Ptr{T}, depth::Int, s::UInt64) where {T}
             return s
         end
         depth -= 1
-        pivot, dup, s = choose_pivot(p, n, s)
+        pivot, dup, s = choose_pivot(p, n, s, buf)
         a, b = split!(p, n, pivot, dup, buf, (p, n, x) -> partition_auto!(p, n, x, buf))
         if a == n
             # Nothing above the pivot: it is the maximum. Done if all keys are

@@ -217,6 +217,15 @@ of three, and reduces them. Here:
   1 vector of $N$ lane medians;
 - its $N$ lanes are sorted and the middle one is the pivot.
 
+Ranges above $2^{18}$ keys instead take the exact median of a larger sample:
+$256$ 32-bit or $128$ 64-bit keys (one base case), loaded as vectors from
+pseudo-random offsets and sorted with the base-case network. There, `dup` is set
+when at least 1/9 of the sample equals the pivot.
+- This improves the split only slightly: 20.8 → 20.1 partition passes for
+  `Float64` at $2^{26}$ keys, with no measurable change in time.
+- It detects duplicates more reliably: 1000 random `UInt64` values sort 3–9%
+  faster.
+
 The pivot is always an input key, as the recursion requires. Random offsets
 protect against inputs constructed to defeat fixed sampling positions; the depth
 limit bounds the remaining risk.
@@ -407,6 +416,15 @@ therefore elsewhere. What was checked:
   two 64-key networks plus a bitonic merge was estimated at about 220 ns, so no
   gain.
 
+- **Pivot quality:** an exact median of a 128-key sample for large ranges (§4)
+  cut the partition passes from 20.8 to 20.1 but left the number of base cases
+  unchanged (802k → 808k, mean 84 keys). The mean leaf size follows from the
+  cutoff of 128 keys: ranges just above it split into two halves of 65–100 keys.
+  So pivots account for at most about 3%, below the noise of the measurements.
+
+About a quarter of the `Float64` time is spent in the base case, and the 128-key
+network spills registers. A register-efficient 64-bit network, for example
+following [WBGS22 §3] without the final transpose, is the remaining candidate.
 The remaining 7% is probably a different small-range sort in x86-simd-sort. That
 cannot be confirmed under this package's clean-room rule.
 
@@ -448,4 +466,29 @@ same input for all methods within a round), runs the methods in a shuffled order
 each round, and reports the best round. Timing repeated sorts of one input could
 let the branch predictor learn its pattern, especially for inputs that fit in
 cache. Interleaving spreads thermal and power drift evenly over the methods.
+
+### h. Quicksort or radix sort, by thread count and size
+
+`bench/crossover.jl` compares this quicksort with ChapelSort.jl's parallel MSD
+radix sort over $n = 2^{20} \dots 2^{28}$ keys and 1, 2, 4 and 8 tasks. Like
+`bench.jl`, it uses fresh inputs and interleaved runs, best of 5. The table
+gives radix time / quicksort time; below 1, the radix sort is faster.
+
+| keys | 1 task | 2 tasks | 4 tasks | 8 tasks |
+|---|---|---|---|---|
+| `Int64` | 1.4–2.8 | 2.0–5.2 | 1.3–2.5 | 0.94–0.99 at ≥ $2^{26}$ (and $2^{20}$), 1.3–1.9 at $2^{22}$–$2^{24}$ |
+| `UInt64` | 1.1–2.4 | 1.6–3.7 | 1.0–2.3 | 0.75–0.82 at ≥ $2^{26}$, 0.91 at $2^{20}$ |
+| `UInt64`, 1000 values | 3.2–4.0 | 3.2–4.0 | 1.5–2.1 | 0.81–0.98 at $2^{20}$ and ≥ $2^{26}$ |
+| `Float64` (randn) | 1.7–3.2 | 2.7–4.3 | 1.7–2.8 | 1.36–2.04 |
+| `Int32` | 1.5–2.3 | 2.3–3.2 | 1.3–2.0 | 1.04–1.39 |
+
+- **Where the radix sort wins:** only with 8 tasks (on 4 P + 4 E cores), and only
+  for 64-bit integer keys, by 2–6% (`Int64`) and 18–25% (`UInt64`) at
+  $\ge 2^{26}$ keys.
+- **Where it never wins:** for floats and 32-bit keys, at any size or task count.
+- **The 2-task column:** the radix sort is relatively slower there than with 1
+  task. That is a scaling issue of ChapelSort's 2-task runs.
+- **A dispatch rule** ("64-bit integers, $n \ge 2^{26}$, at least 8 tasks") would
+  be specific to this machine's memory bandwidth per core. It is not
+  implemented. Measurements on a server or AVX-512 node would be needed first.
 
