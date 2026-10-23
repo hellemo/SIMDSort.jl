@@ -48,15 +48,30 @@ function negate!(k::AbstractVector{<:AbstractFloat})
     return k
 end
 
-# Number of -0.0s in `k` (bit-exact compare, vectorizes).
-function count_negzeros(k::AbstractVector{T}) where {T<:AbstractFloat}
-    U = signedkey(T)
-    nz = reinterpret(U, -zero(T))
-    c = 0
-    @inbounds @simd for i in eachindex(k)
-        c += reinterpret(U, k[i]) == nz
+# Counts of NaNs, -0.0s and +0.0s in `k`, from the bit patterns (vectorizes), by
+# up to `ntasks` concurrent tasks.
+function float_scan(k::AbstractVector{T}, ntasks::Integer) where {T<:AbstractFloat}
+    n = length(k)
+    if ntasks <= 1 || n < 1 << 16
+        return float_scan(k)
     end
-    return c
+    parts = [Threads.@spawn(float_scan(view(k, c)))
+             for c in Iterators.partition(eachindex(k), cld(n, ntasks))]
+    return reduce((a, b) -> a .+ b, fetch.(parts))
+end
+
+function float_scan(k::AbstractVector{T}) where {T<:AbstractFloat}
+    U = signedkey(T)
+    expmask = reinterpret(U, T(Inf))
+    nz = reinterpret(U, -zero(T))
+    nnan = nneg = npos = 0
+    @inbounds @simd for i in eachindex(k)
+        b = reinterpret(U, k[i])
+        nnan += (b & ~nz) > expmask
+        nneg += b == nz
+        npos += b == zero(U)
+    end
+    return (nnan, nneg, npos)
 end
 
 """

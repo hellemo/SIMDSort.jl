@@ -136,7 +136,7 @@ function sort_keys!(p::Ptr{T}, n::Int, ntasks::Int=1) where {T}
     depth = 2 * (8 * sizeof(Int) - leading_zeros(n)) + 4
     s = 0x9e3779b97f4a7c15 ⊻ UInt64(n)
     if ntasks > 1 && n > PAR_MIN
-        pqsort!(p, n, depth, s, ntasks)
+        pqsort!(p, n, depth, s, ntasks, n)
     else
         buf = scratch(T)
         GC.@preserve buf qsort!(p, n, pointer(buf), depth, s)

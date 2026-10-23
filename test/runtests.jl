@@ -147,7 +147,7 @@ end
         buf = SIMDQuickSort.scratch(Int32)
         GC.@preserve w buf SIMDQuickSort.qsort!(pointer(w), length(w), pointer(buf), 0, UInt64(1))
         @test w == sort(v)
-        GC.@preserve w SIMDQuickSort.pqsort!(pointer(v), length(v), 1, UInt64(1), 4)
+        GC.@preserve w SIMDQuickSort.pqsort!(pointer(v), length(v), 1, UInt64(1), 4, length(v))
         @test v == sort(w)
     end
 

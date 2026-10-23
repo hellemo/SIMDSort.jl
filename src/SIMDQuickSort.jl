@@ -49,16 +49,17 @@ end
 # (an exact involution), and since compares treat -0.0 == 0.0, the run of zeros
 # is rewritten in `isless` order afterwards from a count of the -0.0s.
 function simdsort!(v::Vector{T}; rev::Bool=false, ntasks::Integer=1) where {T<:Union{Float32,Float64}}
-    r = nan_partition!(v, rev)
+    nnan, nneg, npos = float_scan(v, ntasks)
+    r = nnan == 0 ? eachindex(v) : nan_partition!(v, rev)
     n = length(r)
     n <= 1 && return v
     GC.@preserve v begin
         p = pointer(v, first(r))
         k = unsafe_wrap(Array, p, n)
         rev && foreach_chunk(negate!, k, ntasks)
-        c = count_negzeros(k)
         presorted!(k) || sort_keys!(p, n, Int(ntasks))
-        order_zeros!(k, c)
+        # After negation (rev) the +0.0s of the input are the -0.0s.
+        order_zeros!(k, rev ? npos : nneg)
         rev && foreach_chunk(negate!, k, ntasks)
     end
     return v

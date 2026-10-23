@@ -95,23 +95,30 @@ function swap_block!(a::Ptr{T}, b::Ptr{T}, len::Int) where {T}
     return nothing
 end
 
-"""
-    pqsort!(p, n, depth, s, ntasks)
+# Ranges are handed to new tasks down to `total ÷ (GRAIN_FACTOR * ntasks)` keys:
+# many more tasks than threads, so that the scheduler balances fast and slow
+# cores.
+const GRAIN_FACTOR = 16
 
-Like `qsort!`, but while a range is larger than `PAR_MIN` the smaller side of each
-partition is sorted by a new task, splitting `ntasks` between the two sides.
-Ranges larger than `PPART_MIN` are partitioned with `ppartition!`. Waits for all
-tasks it started.
 """
-function pqsort!(p::Ptr{T}, n::Int, depth::Int, s::UInt64, ntasks::Int) where {T}
+    pqsort!(p, n, depth, s, ntasks, total)
+
+Like `qsort!`, but while a range is larger than the grain
+`max(PAR_MIN, total ÷ (GRAIN_FACTOR * ntasks))` the smaller side of each
+partition is sorted by a new task. Ranges larger than `PPART_MIN` are
+partitioned with `ppartition!`, by as many tasks as their share
+`ntasks * n / total`. Waits for all tasks it started.
+"""
+function pqsort!(p::Ptr{T}, n::Int, depth::Int, s::UInt64, ntasks::Int, total::Int) where {T}
     buf = scratch(T)
     tasks = Task[]
     alldone = false
+    grain = max(PAR_MIN, total ÷ (GRAIN_FACTOR * ntasks))
     GC.@preserve buf begin
-        while n > PAR_MIN && ntasks > 1 && depth > 0
+        while n > grain && depth > 0
             depth -= 1
             pivot, dup, s = choose_pivot(p, n, s)
-            nt = ntasks     # a fresh binding: the closure must not capture `ntasks`
+            nt = clamp(round(Int, ntasks * n / total), 1, ntasks)
             a, b = split!((p, n, x) -> part(p, n, x, pointer(buf), nt), p, n, pivot, dup)
             if a == n
                 # As in qsort!: the pivot is the maximum.
@@ -120,19 +127,18 @@ function pqsort!(p::Ptr{T}, n::Int, depth::Int, s::UInt64, ntasks::Int) where {T
                     alldone = true
                     break
                 end
-                m = part(p, n, mn, pointer(buf), ntasks)
+                m = part(p, n, mn, pointer(buf), nt)
                 p += m * sizeof(T)
                 n -= m
                 continue
             end
-            # Hand the smaller side to a new task with a proportional share of
-            # `ntasks`; keep the larger side here. [a, b) is done.
+            # Hand the smaller side to a new task, keep the larger one. [a, b) is
+            # done.
             small = min(a, n - b)
-            k = clamp(round(Int, ntasks * small / n), 1, ntasks - 1)
             ps, pl, nl = a <= n - b ? (p, p + b * sizeof(T), n - b) : (p + b * sizeof(T), p, a)
             s = xorshift(s)
-            push!(tasks, Threads.@spawn pqsort!($ps, $small, $depth, $s, $k))
-            p, n, ntasks = pl, nl, ntasks - k
+            push!(tasks, Threads.@spawn pqsort!($ps, $small, $depth, $s, $ntasks, $total))
+            p, n = pl, nl
         end
         alldone || qsort!(p, n, pointer(buf), depth, s)
     end
@@ -141,4 +147,5 @@ function pqsort!(p::Ptr{T}, n::Int, depth::Int, s::UInt64, ntasks::Int) where {T
 end
 
 @inline part(p::Ptr{T}, n, pivot, buf, ntasks) where {T} =
-    n > PPART_MIN ? ppartition!(p, n, pivot, ntasks) : partition_auto!(p, n, pivot, buf)
+    n > PPART_MIN && ntasks > 1 ? ppartition!(p, n, pivot, ntasks) :
+                                  partition_auto!(p, n, pivot, buf)
