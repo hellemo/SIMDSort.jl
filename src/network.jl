@@ -136,13 +136,81 @@ function network_body(R::Int, N::Int)
 end
 
 """
+    halves_body(R, N)
+
+Code for an R×N network (R = 32, more registers than AVX2 has) built from two
+R/2-row networks, which fit in the 16 registers, and a bitonic merge done half
+by half (docs/DESIGN.md §5):
+
+1. sort rows 0..R/2-1 (A) and rows R/2..R-1 (B) as R/2×N matrices; each
+   comes back as N·R/2 sorted keys, register by register;
+2. compare A[i] with B[last - i] (register R/2-1-r of B, lanes reversed): the
+   minima stay in A, the maxima go to B, register by register. Afterwards
+   every key in A is ≤ every key in B, and both halves are bitonic;
+3. sort each half with the half-cleaners of a bitonic merge: register pairs
+   at distances R/4, ..., 1, then lane pairs at distances N/2, ..., 1.
+
+Steps 2 and 3 only ever need two (step 2) or R/2 (step 3) registers live,
+instead of all R, which avoids most register spills.
+"""
+function halves_body(R::Int, N::Int)
+    H = R ÷ 2
+    ex = Expr[]
+    push!(ex, :(a = sortnet($(Expr(:tuple, [:(vs[$r]) for r in 1:H]...)))))
+    push!(ex, :(b = sortnet($(Expr(:tuple, [:(vs[$r]) for r in H+1:R]...)))))
+    push!(ex, :(($(_v.(0:H-1)...),) = a))
+    push!(ex, :(($(_v.(H:R-1)...),) = b))
+    rev = [N - 1 - c for c in 0:N-1]
+    # 2. A[i] against B[N*H - 1 - i].
+    for r in 0:H-1
+        a, b = _v(r), _v(H + H - 1 - r)
+        push!(ex, quote
+            w = $(_shuf(b, rev))
+            lo = vmin($a, w)
+            hi = vmax($a, w)
+            $a = lo
+            $b = $(_shuf(:hi, rev))
+        end)
+    end
+    # 3. Half-cleaners within each half (sequence index i = register*N + lane).
+    for base in (0, H)
+        d = H ÷ 2
+        while d >= 1                       # register distance d (key distance d*N)
+            for r in 0:H-1
+                r & d == 0 || continue
+                a, b = _v(base + r), _v(base + r + d)
+                push!(ex, :(($a, $b) = (vmin($a, $b), vmax($a, $b))))
+            end
+            d ÷= 2
+        end
+        m = N ÷ 2
+        while m >= 1                       # lane distance m
+            perm = [c ⊻ m for c in 0:N-1]
+            for r in 0:H-1
+                a = _v(base + r)
+                push!(ex, quote
+                    w = $(_shuf(a, perm))
+                    $a = $(_blend(:(vmin($a, w)), :(vmax($a, w)), c -> c & m == 0, N))
+                end)
+            end
+            m ÷= 2
+        end
+    end
+    push!(ex, :(return ($(_v.(0:R-1)...),)))
+    return Expr(:block, ex...)
+end
+
+"""
     sortnet(vs::NTuple{R,Vec{N,T}}) -> NTuple{R,Vec{N,T}}
 
 Sort the R*N keys in `vs`; the result holds them in order, lane by lane and
 register by register. `R` must be a power-of-two multiple of `N`.
 """
 @generated function sortnet(vs::NTuple{R,Vec{N,T}}) where {R,N,T}
-    return network_body(R, N)
+    # 64-bit integers keep the single network: their min/max (compare and two
+    # blends) make the split version slower (11-16% in the base case).
+    split = R > 16 && R ÷ 2 >= N && !(T <: Integer && sizeof(T) == 8)
+    return split ? halves_body(R, N) : network_body(R, N)
 end
 
 # Copy `n ≤ R*N` keys at `p` to `buf`, pad with typemax, sort, and copy back.
