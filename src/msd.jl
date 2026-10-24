@@ -255,7 +255,7 @@ end
 
 const DIST_BUCKETS = 256          # bucket ids fit a UInt8
 const DIST_MINN = Ref(1 << 22)      # keys
-const DIST_MINTASKS = Ref(16)       # Xeon: wins from 16 threads, loses at 8
+const DIST_MINTASKS = Ref(24)       # Xeon: ties or loses at 16 tasks, wins at 32 and 56
 
 use_distribution(n::Int, ntasks::Int) = ntasks >= DIST_MINTASKS[] && n >= DIST_MINN[]
 
