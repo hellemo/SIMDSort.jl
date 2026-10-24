@@ -11,7 +11,9 @@
 #                                    a state init() (e.g. scratch buffers)
 #
 # The parallel quicksort (pqsort!) and ppartition! spawn their own tasks: see
-# src/parallel.jl.
+# src/parallel.jl. Spawned tasks are collected in a Vector{Task} and waited on,
+# not with @sync, whose Channel{Any} makes the waits dynamic calls (which
+# JuliaC's trimming cannot compile).
 
 # Below this many keys, work runs on the calling task.
 const PAR_MIN_KEYS = 1 << 14
@@ -41,9 +43,8 @@ function tforeach(f::F, n::Integer, ntasks::Integer; minlen::Integer = PAR_MIN_K
     if nc == 1
         f(1:Int(n))
     else
-        @sync for r in chunks(n, nc)
-            Threads.@spawn f(r)
-        end
+        tasks = Task[Threads.@spawn(f(r)) for r in chunks(n, nc)]
+        foreach(wait, tasks)
     end
     return nothing
 end
@@ -57,9 +58,8 @@ function tforeach_index(f::F, nc::Integer) where {F}
     if nc <= 1
         f(1)
     else
-        @sync for c in 1:nc
-            Threads.@spawn f(c)
-        end
+        tasks = Task[Threads.@spawn(f(c)) for c in 1:nc]
+        foreach(wait, tasks)
     end
     return nothing
 end
@@ -139,16 +139,18 @@ function tworkers(f::F, groups::AbstractVector, ntasks::Integer; init::I = () ->
     if nw <= 1
         worker_loop(f, init, groups, counter)
     else
-        @sync for _ in 1:nw
-            Threads.@spawn begin
+        tasks = Task[]
+        for _ in 1:nw
+            push!(tasks, Threads.@spawn begin
                 enter_task!()
                 try
                     worker_loop(f, init, groups, counter)
                 finally
                     leave_task!()
                 end
-            end
+            end)
         end
+        foreach(wait, tasks)
     end
     return nothing
 end

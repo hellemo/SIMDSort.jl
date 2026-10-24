@@ -25,13 +25,11 @@ function ppartition!(p::KeyRef{T}, n::Int, pivot::T, ntasks::Int) where {T}
     count!(:parallel_partitions)
     bounds = [div(n * i, ntasks) for i in 0:ntasks]
     counts = Vector{Int}(undef, ntasks)
-    @sync for i in 1:ntasks
-        Threads.@spawn begin
-            buf = scratch(T)
-            lo = bounds[i]
-            GC.@preserve buf begin
-                counts[i] = partition_auto!(shift(p, lo), bounds[i+1] - lo, pivot, scratchref(p, buf))
-            end
+    tforeach_index(ntasks) do i
+        buf = scratch(T)
+        lo = bounds[i]
+        GC.@preserve buf begin
+            counts[i] = partition_auto!(shift(p, lo), bounds[i+1] - lo, pivot, scratchref(p, buf))
         end
     end
     m = sum(counts)
@@ -48,9 +46,9 @@ function ppartition!(p::KeyRef{T}, n::Int, pivot::T, ntasks::Int) where {T}
     end
     X = sum(last, big; init=0)
     X == 0 && return m
-    @sync for i in 1:ntasks
+    tforeach_index(ntasks) do i
         from, to = div(X * (i - 1), ntasks), div(X * i, ntasks)
-        to > from && Threads.@spawn swap_runs!(p, big, small, from, to)
+        to > from && swap_runs!(p, big, small, from, to)
     end
     return m
 end

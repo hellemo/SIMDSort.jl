@@ -1,0 +1,11 @@
+name = "SIMDSortC"
+uuid = "5d8e2a5b-6c1e-4f3a-9b7d-2f4e8a1c0d36"
+version = "0.1.0"
+
+[deps]
+SIMD = "fdea26ae-647d-5447-a871-4b548cad5224"
+SIMDSort = "0db4c8ee-f0ef-4abc-a572-3607934b7ab8"
+
+[sources]
+SIMD = {url = "https://github.com/hellemo/SIMD.jl", rev = "permute-compress"}
+SIMDSort = {path = ".."}

@@ -107,6 +107,9 @@ notes, the measuring scripts, internals) is built with Documenter:
 `julia --project=docs -e 'using Pkg; Pkg.instantiate()'`, then
 `julia --project=docs docs/make.jl` (HTML in `docs/build/`).
 
+A shared library with C entry points for the six primitive types, built with
+JuliaC and trimmed, is in `lib/` (see the "C library" page of the docs).
+
 ## Results
 
 Measured on an Intel Core Ultra 7 268V (Lunar Lake: 4 P + 4 E cores, AVX2,
