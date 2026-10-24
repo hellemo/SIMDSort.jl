@@ -184,17 +184,18 @@ keywidth(::WordKeys{M}) where {M} = 64M
 @inline exhausted(ks::WordKeys, i::Int, off::Int) = off >= keywidth(ks)
 
 # Bits [off, off + K) (K ≤ 63) lie within words q and q + 1, q = off ÷ 64.
-@inline function keybits(ks::WordKeys{M}, i::Int, off::Int, K::Int) where {M}
+@inline keybits(ks::WordKeys, i::Int, off::Int, K::Int) = wordbits(@inbounds(ks.w[i]), off, K, ks.rev)
+
+# Bits [off, off + K) (K ≤ 63) of the order words w, complemented for rev.
+@inline function wordbits(w::NTuple{M,UInt64}, off::Int, K::Int, rev::Bool) where {M}
     off >= 64M && return zero(UInt64)
-    w = @inbounds ks.w[i]
     q = off >> 6
     hi = @inbounds w[q+1]
     lo = q + 2 <= M ? @inbounds(w[q+2]) : zero(UInt64)
-    if ks.rev
+    if rev
         hi, lo = ~hi, q + 2 <= M ? ~lo : zero(UInt64)
     end
-    x = ((UInt128(hi) << 64 | UInt128(lo)) << (off & 63)) >> (128 - K)
-    return x % UInt64
+    return (((UInt128(hi) << 64 | UInt128(lo)) << (off & 63)) >> (128 - K)) % UInt64
 end
 
 """

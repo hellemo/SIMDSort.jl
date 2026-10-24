@@ -15,11 +15,18 @@ const MSD_BUCKETS = 256           # buckets of the distribution pass (bucket ids
 const MSD_OVERSAMPLE = 32         # sample keys per bucket for the splitters
 const MSD_MINN = 1 << 16          # below this, the plain permutation path
 
+# ---------------------------------------------------------------------------
+# A distribution pass, shared by the two users below: classify every element
+# into one of nb buckets (its id stored as one byte), then scatter the elements
+# stably into a scratch array, bucket by bucket, with one task per chunk.
+
 # Branch-free search: the number of splitters spl[1:nb-1] that are <= x (spl
-# sorted, length nb = MSD_BUCKETS, a power of two; spl[nb] is never read).
-@inline function bucket_of(spl::Vector{UInt64}, x::UInt64)
+# sorted, length nb; spl[nb] is never read). nb is a compile-time constant: the
+# loop unrolls into conditional moves; with a run-time nb it compiled to
+# branches, 8 mispredictions per key.
+@inline function bucket_of(spl::Vector{S}, x::S, ::Val{nb}) where {S,nb}
     i = 0
-    step = MSD_BUCKETS >> 1
+    step = nb >> 1
     while step > 0
         @inbounds i += ifelse(spl[i+step] <= x, step, 0)
         step >>= 1
@@ -27,25 +34,104 @@ const MSD_MINN = 1 << 16          # below this, the plain permutation path
     return i
 end
 
-# Splitters from the leading order words of a sorted random sample, every
-# MSD_OVERSAMPLE-th [IPS4o] (radix digits put skewed keys such as random floats
-# into a handful of buckets): spl[j] for j in 1:nb-1, padded with typemax at
-# index nb, so that bucket(x) = #{j : spl[j] <= x}. `nothing` if the sample has
-# too few distinct leading words for balanced buckets.
-function word_splitters(f::F, v::AbstractVector, nb::Int) where {F}
+# Splitters from a sorted random sample of key(v[i]), every MSD_OVERSAMPLE-th
+# [IPS4o] (radix digits would put skewed keys, such as random floats, into a
+# handful of buckets). `nothing` if the sample has too few distinct keys for
+# balanced buckets.
+function sample_splitters(key::F, v::AbstractVector, nb::Int) where {F}
     n = length(v)
-    smp = Vector{UInt64}(undef, nb * MSD_OVERSAMPLE)
+    smp = [key(@inbounds v[1])]
+    resize!(smp, nb * MSD_OVERSAMPLE)
     r = UInt64(n) | 1
     @inbounds for j in eachindex(smp)
         r = xorshift(r)
-        smp[j] = f(v[1+Int(r % UInt64(n))])[1]
+        smp[j] = key(v[1+Int(r % UInt64(n))])
     end
     sort!(smp)
     count(i -> smp[i] != smp[i-1], 2:length(smp)) < nb ÷ 4 && return nothing
-    spl = [smp[j*MSD_OVERSAMPLE] for j in 1:nb-1]
-    push!(spl, typemax(UInt64))
-    return spl
+    return [smp[j*MSD_OVERSAMPLE] for j in 1:nb]
 end
+
+# Bucket of a wide element by its leading order word f(x)[1] (mirrored for rev).
+struct WordBucket{F}
+    f::F
+    spl::Vector{UInt64}
+    rev::Bool
+end
+@inline function (c::WordBucket)(x)
+    d = bucket_of(c.spl, c.f(x)[1], Val(MSD_BUCKETS))
+    return c.rev ? MSD_BUCKETS - 1 - d : d
+end
+
+# Bucket of a primitive key.
+struct KeyBucket{S}
+    spl::Vector{S}
+end
+@inline (c::KeyBucket)(x) = bucket_of(c.spl, x, Val(DIST_BUCKETS))
+
+# The chunks of the input, where chunk c writes bucket b (start[b, c]), and the
+# buckets (bucket b is bstart[b]:bstart[b+1]-1).
+struct Distribution
+    cs::Vector{UnitRange{Int}}
+    start::Matrix{Int}
+    bstart::Vector{Int}
+end
+
+# Count: ids[i] = classify(src[i]) ∈ 0:nb-1 for every i, then bucket-major
+# prefix sums.
+function distribution(classify::C, src::AbstractVector, ids::AbstractVector{UInt8},
+                      nb::Int, ntasks::Int) where {C}
+    cs = chunks(length(src), ntasks)
+    nc = length(cs)
+    counts = zeros(Int, nb, nc)
+    tforeach_index(nc) do c
+        count_chunk!(counts, ids, classify, src, cs[c], c, nb)
+    end
+    start = similar(counts)
+    bstart = Vector{Int}(undef, nb + 1)
+    s = 1
+    for b in 1:nb
+        bstart[b] = s
+        for c in 1:nc
+            start[b, c] = s
+            s += counts[b, c]
+        end
+    end
+    bstart[nb+1] = s
+    return Distribution(cs, start, bstart)
+end
+
+function count_chunk!(counts, ids, classify::C, src, r, c, nb) where {C}
+    cnt = zeros(Int, nb)
+    @inbounds for i in r
+        d = classify(src[i])
+        ids[i] = d % UInt8
+        cnt[d+1] += 1
+    end
+    @inbounds counts[:, c] .= cnt
+    return nothing
+end
+
+# Scatter: dst[...] = src[i] into the buckets ids[i], stably.
+function scatter!(dst::AbstractVector, src::AbstractVector, ids::AbstractVector{UInt8}, dist::Distribution)
+    tforeach_index(length(dist.cs)) do c
+        scatter_chunk!(dst, src, ids, dist.start, dist.cs[c], c)
+    end
+    return dst
+end
+
+function scatter_chunk!(dst, src, ids, start, r, c)
+    pos = start[:, c]
+    @inbounds for i in r
+        d = ids[i] + 1
+        dst[pos[d]] = src[i]
+        pos[d] += 1
+    end
+    return nothing
+end
+
+# ---------------------------------------------------------------------------
+# sort! for wide fixed-width keys.
 
 """
     sort_by_words!(v, f, rev, ntasks)
@@ -58,56 +144,22 @@ which halves the memory traffic of the scatter.
 """
 function sort_by_words!(v::Vector{T}, f::F, rev::Bool, ntasks::Int) where {T,F}
     n = length(v)
-    n < MSD_MINN && return permute_by!(v, wordkeys_sortperm(words_of(f, v, ntasks); rev, ntasks), ntasks)
+    n < MSD_MINN && return sort_by_words_perm!(v, f, rev, ntasks)
     count!(:msd_sorts)
     nb = MSD_BUCKETS
-    spl = @phase :msd_sample word_splitters(f, v, nb)
+    spl = @phase :msd_sample sample_splitters(x -> f(x)[1], v, nb)
     if spl === nothing          # few distinct leading words: unbalanced buckets
         count!(:msd_skipped_fewlead)
-        return permute_by!(v, wordkeys_sortperm(words_of(f, v, ntasks); rev, ntasks), ntasks)
+        return sort_by_words_perm!(v, f, rev, ntasks)
     end
-    cs = chunks(n, ntasks)
-    nc = length(cs)
-    counts = zeros(Int, nb, nc)
     arena = ScratchArena()
     try
-        bk = alloc!(arena, UInt8, n)
+        ids = alloc!(arena, UInt8, n)
         tv = alloc!(arena, T, n)
-        @phase :msd_count begin
-            tforeach_index(nc) do c
-                cnt = zeros(Int, nb)
-                @inbounds for i in cs[c]
-                    d = bucket_of(spl, f(v[i])[1])
-                    d = rev ? nb - 1 - d : d
-                    bk[i] = d % UInt8
-                    cnt[d+1] += 1
-                end
-                @inbounds counts[:, c] .= cnt
-            end
-            # Bucket-major prefix sums: chunk c writes bucket b from start[b, c].
-            start = similar(counts)
-            bstart = Vector{Int}(undef, nb + 1)
-            s = 1
-            for b in 1:nb
-                bstart[b] = s
-                for c in 1:nc
-                    start[b, c] = s
-                    s += counts[b, c]
-                end
-            end
-            bstart[nb+1] = s
-        end
+        dist = @phase :msd_count distribution(WordBucket(f, spl, rev), v, ids, nb, ntasks)
+        bstart = dist.bstart
         count_buckets(:msd, bstart)
-        @phase :msd_scatter begin
-            tforeach_index(nc) do c
-                pos = start[:, c]
-                @inbounds for i in cs[c]
-                    d = bk[i] + 1
-                    tv[pos[d]] = v[i]
-                    pos[d] += 1
-                end
-            end
-        end
+        @phase :msd_scatter scatter!(tv, v, ids, dist)
         @phase :msd_finish begin
             # Sort every bucket from the scratch array back into v, in cache:
             # groups of buckets of about equal size on ntasks workers, each with
@@ -126,24 +178,17 @@ function sort_by_words!(v::Vector{T}, f::F, rev::Bool, ntasks::Int) where {T,F}
     end
 end
 
+# Small inputs, and too few distinct leading words: the permutation of the
+# windowed sort, applied in place.
+sort_by_words_perm!(v, f::F, rev::Bool, ntasks::Int) where {F} =
+    permute_by!(v, wordkeys_sortperm(words_of(f, v, ntasks); rev, ntasks), ntasks)
+
 # Finish buckets bs with one pair of scratch buffers.
 
 function finish_buckets!(v, tv, bstart, bs, f::F, rev::Bool, keys::Vector{UInt64}, idx::Vector{Int}) where {F}
     for b in bs
         finish_bucket!(v, tv, bstart[b], bstart[b+1] - 1, f, rev, keys, idx)
     end
-end
-
-# Bits [off, off + K) (K ≤ 63) of the order words w, complemented for rev.
-@inline function wordbits(w::NTuple{M,UInt64}, off::Int, K::Int, rev::Bool) where {M}
-    off >= 64M && return zero(UInt64)
-    q = off >> 6
-    hi = @inbounds w[q+1]
-    lo = q + 2 <= M ? @inbounds(w[q+2]) : zero(UInt64)
-    if rev
-        hi, lo = ~hi, q + 2 <= M ? ~lo : zero(UInt64)
-    end
-    return (((UInt128(hi) << 64 | UInt128(lo)) << (off & 63)) >> (128 - K)) % UInt64
 end
 
 # Sort tv[a:e] stably by order words into v[a:e]: one SIMD sort of 64-bit keys
@@ -212,19 +257,6 @@ const DIST_BUCKETS = 256          # bucket ids fit a UInt8
 const DIST_MINN = Ref(1 << 22)      # keys
 const DIST_MINTASKS = Ref(16)       # Xeon: wins from 16 threads, loses at 8
 
-# The number of spl[1:nb-1] that are <= x (nb = length(spl), a power of two).
-# (nb a compile-time constant: the loop unrolls into conditional moves; with a
-# run-time nb it compiled to branches, 8 mispredictions per key.)
-@inline function bucket_of_n(spl::Vector{S}, x::S, ::Val{nb}) where {S,nb}
-    i = 0
-    step = nb >> 1
-    while step > 0
-        @inbounds i += ifelse(spl[i+step] <= x, step, 0)
-        step >>= 1
-    end
-    return i
-end
-
 use_distribution(n::Int, ntasks::Int) = ntasks >= DIST_MINTASKS[] && n >= DIST_MINN[]
 
 # The quicksort, or above DIST_MINTASKS tasks and DIST_MINN keys the
@@ -246,45 +278,17 @@ few distinct keys for balanced buckets.
 function distribute_sort!(p::Ptr{S}, n::Int, ntasks::Int) where {S}
     nb = DIST_BUCKETS
     k = unsafe_wrap(Array, p, n)
-    smp = Vector{S}(undef, nb * MSD_OVERSAMPLE)
-    r = UInt64(n) | 1
-    @inbounds for j in eachindex(smp)
-        r = xorshift(r)
-        smp[j] = k[1+Int(r % UInt64(n))]
-    end
-    sort!(smp)
-    count(i -> smp[i] != smp[i-1], 2:length(smp)) < nb ÷ 4 && return false
+    spl = sample_splitters(identity, k, nb)
+    spl === nothing && return false
     count!(:dist_sorts)
-    spl = S[smp[j*MSD_OVERSAMPLE] for j in 1:nb]
-    cs = chunks(n, ntasks)
-    nc = length(cs)
-    counts = zeros(Int, nb, nc)
     arena = ScratchArena()
     try
-        bk = alloc!(arena, UInt8, n)
+        ids = alloc!(arena, UInt8, n)
         tv = alloc!(arena, S, n)
-        @phase :dist_count begin
-            tforeach_index(nc) do c
-                dist_count!(counts, bk, k, spl, cs[c], c, Val(nb))
-            end
-            start = similar(counts)
-            bstart = Vector{Int}(undef, nb + 1)
-            s = 1
-            for b in 1:nb
-                bstart[b] = s
-                for c in 1:nc
-                    start[b, c] = s
-                    s += counts[b, c]
-                end
-            end
-            bstart[nb+1] = s
-        end
+        dist = @phase :dist_count distribution(KeyBucket(spl), k, ids, nb, ntasks)
+        bstart = dist.bstart
         count_buckets(:dist, bstart)
-        @phase :dist_scatter begin
-            tforeach_index(nc) do c
-                dist_scatter!(tv, k, bk, start, cs[c], c, nb)
-            end
-        end
+        @phase :dist_scatter scatter!(tv, k, ids, dist)
         @phase :dist_finish begin
             groups = balanced_groups(diff(bstart), cld(n, 8ntasks))
             run_limited(bs -> dist_finish!(k, tv, bstart, bs), groups, ntasks)
@@ -293,27 +297,6 @@ function distribute_sort!(p::Ptr{S}, n::Int, ntasks::Int) where {S}
     finally
         release!(arena)
     end
-end
-
-function dist_count!(counts, bk, k::Vector{S}, spl::Vector{S}, r, c, vnb::Val{nb}) where {S,nb}
-    cnt = zeros(Int, nb)
-    @inbounds for i in r
-        d = bucket_of_n(spl, k[i], vnb)
-        bk[i] = d % UInt8
-        cnt[d+1] += 1
-    end
-    @inbounds counts[:, c] .= cnt
-    return nothing
-end
-
-function dist_scatter!(tv::Vector{S}, k::Vector{S}, bk, start, r, c, nb) where {S}
-    pos = start[:, c]
-    @inbounds for i in r
-        d = bk[i] + 1
-        tv[pos[d]] = k[i]
-        pos[d] += 1
-    end
-    return nothing
 end
 
 function dist_finish!(k::Vector{S}, tv::Vector{S}, bstart, bs) where {S}
