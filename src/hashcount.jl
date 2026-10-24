@@ -37,40 +37,73 @@ function chao1(s::Vector)
     return u + f1^2 / (2 * (f2 + 1))
 end
 
-@inline hashslot(x::U, mask::Int) where {U<:Unsigned} =
-    ((UInt64(x) * 0x9e3779b97f4a7c15) >> 32) % Int & mask
+# The hash key of a table key: its bits, or for a Symbol its address (symbols
+# are interned, so equal names are the same object, and never freed).
+@inline hashkey(x::Unsigned) = UInt64(x)
+@inline hashkey(x::Symbol) = UInt64(UInt(pointer_from_objref(x)))
+@inline hashslot(x, mask::Int) = ((hashkey(x) * 0x9e3779b97f4a7c15) >> 32) % Int & mask
 
-struct CountTable{U}
-    keys::Vector{U}
-    counts::Vector{Int}     # 0 marks an empty slot
+# An open-addressing table (linear probing; capacity a power of two) from keys
+# to counts; keys are compared with ===. Key and count share one slot, so a
+# probe touches one cache line.
+struct CountTable{K}
+    slots::Vector{Tuple{K,Int}}     # (key, count); count 0 marks an empty slot
 end
-CountTable{U}(cap::Int) where {U} = CountTable{U}(Vector{U}(undef, cap), zeros(Int, cap))
+CountTable{K}(cap::Int) where {K} = CountTable{K}(fill((emptykey(K), 0), cap))
+emptykey(::Type{U}) where {U<:Unsigned} = zero(U)
+emptykey(::Type{Symbol}) = Symbol("")
 
-# Count the bit patterns of k[r] into t; false if t got more than half full.
-function count_into!(t::CountTable{U}, k::AbstractVector{U}, r::UnitRange{Int}) where {U}
-    keys, counts = t.keys, t.counts
-    mask = length(keys) - 1
-    limit = length(keys) ÷ 2
+capacity(t::CountTable) = length(t.slots)
+
+# Count the keys k[r] into t; false if t got more than half full.
+function count_into!(t::CountTable{K}, k::AbstractVector{K}, r::UnitRange{Int}) where {K}
+    slots = t.slots
+    mask = length(slots) - 1
+    limit = length(slots) ÷ 2
     used = 0
     @inbounds for i in r
         x = k[i]
         s = hashslot(x, mask)
         while true
-            c = counts[s+1]
+            y, c = slots[s+1]
             if c == 0
-                keys[s+1] = x
-                counts[s+1] = 1
+                slots[s+1] = (x, 1)
                 used += 1
                 used > limit && return false
                 break
-            elseif keys[s+1] == x
-                counts[s+1] = c + 1
+            elseif y === x
+                slots[s+1] = (x, c + 1)
                 break
             end
             s = (s + 1) & mask
         end
     end
     return true
+end
+
+# The used slots of a table, as (keys, counts).
+function compact(t::CountTable{K}) where {K}
+    used = filter(e -> e[2] != 0, t.slots)
+    return (first.(used), last.(used))
+end
+
+# Add c to the count of key x; true if x was new. The table must have a free
+# slot.
+function add_count!(t::CountTable{K}, x::K, c::Int) where {K}
+    slots = t.slots
+    mask = length(slots) - 1
+    s = hashslot(x, mask)
+    @inbounds while true
+        y, d = slots[s+1]
+        if d == 0
+            slots[s+1] = (x, c)
+            return true
+        elseif y === x
+            slots[s+1] = (x, d + c)
+            return false
+        end
+        s = (s + 1) & mask
+    end
 end
 
 """
@@ -98,10 +131,9 @@ function hash_count_sort!(v::AbstractVector{T}, o::Ord, ntasks::Int) where {T<:S
     all(ok) || (count!(:hash_aborts); return false)
     # Merge the tables (few entries each).
     total = Dict{U,Int}()
-    for t in tables, s in eachindex(t.counts)
-        c = t.counts[s]
+    for t in tables, (x, c) in t.slots
         c == 0 && continue
-        total[t.keys[s]] = get(total, t.keys[s], 0) + c
+        total[x] = get(total, x, 0) + c
     end
     vals = T[reinterpret(T, x) for x in keys(total)]
     cnts = [total[reinterpret(U, x)] for x in vals]
@@ -111,13 +143,20 @@ function hash_count_sort!(v::AbstractVector{T}, o::Ord, ntasks::Int) where {T<:S
     # Write the runs, by up to ntasks tasks over equal slices of v.
     count!(:hash_sorts)
     count!(:hash_distinct_keys, length(svals))
-    starts = cumsum([1; scnts[1:end-1]])
-    tforeach(n, ntasks) do r
+    write_runs!(v, svals, scnts, ntasks)
+    return true
+end
+
+# v = vals[1] repeated cnts[1] times, then vals[2] cnts[2] times, ..., by up to
+# ntasks tasks over equal slices of v.
+function write_runs!(v::AbstractVector, vals::AbstractVector, cnts::AbstractVector{Int}, ntasks::Int)
+    starts = cumsum([1; cnts[1:end-1]])
+    tforeach(length(v), ntasks) do r
         j = searchsortedlast(starts, first(r))
         i = first(r)
         @inbounds while i <= last(r)
-            e = min(last(r), starts[j] + scnts[j] - 1)
-            x = svals[j]
+            e = min(last(r), starts[j] + cnts[j] - 1)
+            x = vals[j]
             for q in i:e
                 v[q] = x
             end
@@ -125,5 +164,5 @@ function hash_count_sort!(v::AbstractVector{T}, o::Ord, ntasks::Int) where {T<:S
             j += 1
         end
     end
-    return true
+    return v
 end

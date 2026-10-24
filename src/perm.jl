@@ -429,8 +429,8 @@ function simdsortperm(v::Vector{T}; rev::Bool=false,
                       ntasks::Integer=1) where {T<:Union{ByteString,Symbol}}
     length(v) <= 1 && return collect(1:length(v))
     if T === Symbol
-        r = symbol_ranks(v, Int(ntasks))
-        r === nothing || return simdsortperm(r[1]; rev, ntasks)
+        codes = symbol_codes(v, Int(ntasks))
+        codes === nothing || return simdsortperm(codes; rev, ntasks)
     end
     n = length(v)
     arena = ScratchArena()
@@ -447,95 +447,6 @@ function simdsortperm(v::Vector{T}; rev::Bool=false,
 end
 
 """
-    symbol_ranks(v, ntasks) -> (ranks::Vector{Int32}, sorted_unique::Vector{Symbol}) or nothing
-
-Symbols are interned, so equal names are the same object: a hash table from
-symbol to code, the distinct symbols sorted by name, and their ranks. Gives up
-(returns `nothing`) when there are more than `length(v) ÷ 4` distinct symbols.
-"""
-function symbol_ranks(v::Vector{Symbol}, ntasks::Int)
-    n = length(v)
-    n < 1024 && return nothing
-    limit = n ÷ 4
-    nc = partasks(n, ntasks, PERM_PAR_MIN)
-    nc == 1 && return symbol_ranks_serial(v, limit)
-    # The distinct symbols: a set per chunk, merged pairwise in parallel (the
-    # serial dictionary pass took 0.23 s for 10^7 symbols at any thread count).
-    @phase :symbol_sets begin
-        cs = chunks(n, nc)
-        sets = [Set{Symbol}() for _ in cs]
-        over = Threads.Atomic{Bool}(false)
-        tforeach_index(length(cs)) do c
-            st = sets[c]
-            @inbounds for i in cs[c]
-                push!(st, v[i])
-                if length(st) > limit
-                    over[] = true
-                    return
-                end
-            end
-        end
-    end
-    over[] && return nothing
-    @phase :symbol_merge begin
-        while length(sets) > 1
-            half = cld(length(sets), 2)
-            tforeach_index(length(sets) - half) do c
-                union!(sets[c], sets[c+half])
-            end
-            resize!(sets, half)
-            length(sets[1]) > limit && return nothing
-        end
-        uniq = collect(sets[1])
-    end
-    length(uniq) > limit && return nothing
-    order = GC.@preserve uniq begin
-        ks = ByteKeys(uniq, false, 1)
-        refine!(ks, collect(1:length(uniq)), 0, 1, prefix_cache(ks, 1))
-    end
-    sorted = uniq[order]
-    rank = Dict{Symbol,Int32}(s => Int32(r) for (r, s) in enumerate(sorted))
-    # Concurrent reads of the finished dictionary.
-    codes = Vector{Int32}(undef, n)
-    @phase :symbol_lookup begin
-        tforeach(n, ntasks) do rg
-            @inbounds for i in rg
-                codes[i] = rank[v[i]]
-            end
-        end
-    end
-    return codes, sorted
-end
-
-# One dictionary pass that assigns codes in order of first appearance.
-function symbol_ranks_serial(v::Vector{Symbol}, limit::Int)
-    n = length(v)
-    code = Dict{Symbol,Int32}()
-    codes = Vector{Int32}(undef, n)
-    @inbounds for i in 1:n
-        c = get!(code, v[i], Int32(length(code) + 1))
-        length(code) > limit && return nothing
-        codes[i] = c
-    end
-    uniq = Vector{Symbol}(undef, length(code))
-    for (s, c) in code
-        uniq[c] = s
-    end
-    order = GC.@preserve uniq begin
-        ks = ByteKeys(uniq, false, 1)
-        refine!(ks, collect(1:length(uniq)), 0, 1, prefix_cache(ks, 1))
-    end
-    rank = Vector{Int32}(undef, length(uniq))
-    for (r, c) in enumerate(order)
-        rank[c] = Int32(r)
-    end
-    @inbounds for i in 1:n
-        codes[i] = rank[codes[i]]
-    end
-    return codes, uniq[order]
-end
-
-"""
     simdsort!(v::Vector{String}; rev=false, ntasks=1)
     simdsort!(v::Vector{Symbol}; rev=false, ntasks=1)
 
@@ -543,19 +454,7 @@ Sort strings or symbols in the order of `isless` (bytewise, shorter first on a
 common prefix), through [`simdsortperm`](@ref).
 """
 function simdsort!(v::Vector{T}; rev::Bool=false, ntasks::Integer=1) where {T<:Union{ByteString,Symbol}}
-    if T === Symbol
-        r = symbol_ranks(v, Int(ntasks))
-        if r !== nothing
-            ranks, sorted = r
-            simdsort!(ranks; rev, ntasks)
-            tforeach(length(v), Int(ntasks)) do rg
-                @inbounds for i in rg
-                    v[i] = sorted[ranks[i]]
-                end
-            end
-            return v
-        end
-    end
+    T === Symbol && symbol_sort!(v, ordering(rev), Int(ntasks)) && return v
     p = simdsortperm(v; rev, ntasks)
     permute_by!(v, p, Int(ntasks))
     return v

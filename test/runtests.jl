@@ -241,6 +241,20 @@ end
             @test simdsortperm(sy; rev, ntasks=nt) == sortperm(sy; rev)
             @test isequal(simdsort(sy; rev, ntasks=nt), sort(sy; rev))
         end
+        # Symbols by hash counting: few and many distinct, more distinct than
+        # n/4 (byte path), a table that overflows its estimate (fallback),
+        # and several tasks merging the per-task tables.
+        names = [Symbol(randstr(rand(rng, 1:12))) for _ in 1:30_000]
+        symcases = [rand(rng, names[1:3], 50_000), rand(rng, names[1:2000], 200_000),
+                    rand(rng, names, 60_000),                      # > n/4 distinct
+                    [names[rand(rng) < 0.5 ? 1 : rand(rng, 1:20_000)] for _ in 1:100_000],
+                    fill(:only, 5000), Symbol[]]
+        for sy in symcases, rev in (false, true), nt in (1, 3, 8)
+            @test simdsortperm(sy; rev, ntasks=nt) == sortperm(sy; rev)
+            @test simdsort(sy; rev, ntasks=nt) == sort(sy; rev)
+        end
+        r = SIMDSort.instrumented(() -> simdsort!(rand(rng, names[1:50], 100_000); ntasks = 4))
+        @test get(r.counters, :symbol_sorts, 0) == 1
         # Views: SubString{String}, and StringView (Julia 1.14+).
         long = [randstr(rand(rng, 0:30)) * "\xff" for _ in 1:20_000]
         subs = [SubString(s, 1, max(0, ncodeunits(s) - rand(rng, 1:3))) for s in long]
