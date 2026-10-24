@@ -217,6 +217,10 @@ function refine!(ks::KeySource, perm::AbstractVector{Int}, off::Int, ntasks::Int
         c < 8 && break
         off += c
     end
+    if INSTR[]
+        count!(:window_sorts)
+        count!(:window_keys, m)
+    end
     simdsort!(keys; ntasks)
     old = copy(perm)
     foreach_range(m, ntasks) do r

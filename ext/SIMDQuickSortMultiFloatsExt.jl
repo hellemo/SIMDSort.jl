@@ -39,8 +39,9 @@ simdsortperm(v::Vector{<:MF{T}}; rev::Bool=false, ntasks::Integer=1) where {T<:U
     SIMDQuickSort.wordkeys_sortperm(map(words, v); rev, ntasks)
 
 function simdsort!(v::Vector{<:MF{T}}; rev::Bool=false, ntasks::Integer=1) where {T<:Union{Float32,Float64}}
-    SIMDQuickSort.permute_by!(v, simdsortperm(v; rev, ntasks), Int(ntasks))
-    return v
+    length(v) <= 1 && return v
+    nt = Int(ntasks)
+    return SIMDQuickSort.sort_by_words!(v, words, rev, nt)
 end
 
 end

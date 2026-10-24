@@ -147,17 +147,25 @@ function qsort!(p::Ptr{T}, n::Int, buf::Ptr{T}, depth::Int, s::UInt64,
                 lo::T=typemin(T), hi::T=typemax(T)) where {T}
     while n > basecase_max(T)
         if depth == 0
+            count!(:depth_limit_fallbacks)
             sort!(unsafe_wrap(Array, p, n))
             return s
         end
         depth -= 1
-        pivot, dup, s = choose_pivot(p, n, s, buf)
-        a, b = split!(p, n, pivot, dup, buf, (p, n, x) -> partition_auto!(p, n, x, buf))
+        pivot, dup, s = @phase :pivot choose_pivot(p, n, s, buf)
+        if INSTR[]
+            count!(:partition_calls)
+            dup && count!(:threeway_partitions)
+            count!(Symbol(:partition_keys_2e, sizeclass(n)), n)
+        end
+        a, b = @phase(Symbol(:partition_2e, sizeclass(n)),
+                      split!(p, n, pivot, dup, buf, (p, n, x) -> partition_auto!(p, n, x, buf)))
         if a == n
             # Nothing above the pivot: it is the maximum. Done if all keys are
             # equal; otherwise split off the copies of the minimum.
+            count!(:pivot_was_maximum)
             mn, mx = vextrema(p, n)
-            mn == mx && return s
+            mn == mx && (count!(:equal_ranges); return s)
             m = partition_auto!(p, n, mn, buf)
             p += m * sizeof(T)
             n -= m
@@ -177,7 +185,11 @@ function qsort!(p::Ptr{T}, n::Int, buf::Ptr{T}, depth::Int, s::UInt64,
             hi = pivot
         end
     end
-    leaf_sort!(p, n, buf, lo, hi)
+    if INSTR[]
+        count!(:leaf_calls)
+        count!(:leaf_keys, n)
+    end
+    @phase :leaf_sort leaf_sort!(p, n, buf, lo, hi)
     return s
 end
 
@@ -319,6 +331,7 @@ function counting_sort!(v::Vector{T}, rev::Bool, ntasks::Int) where {T<:Integer}
     l = findlast(!iszero, counts)
     (l - f <= COUNT_MAXRANGE && l - f < n ÷ 4) || return false
     fill_runs!(v, view(counts, f:l), T(lo + f - 1), rev, ntasks)
+    count!(:counting_sorts)
     return true
 end
 

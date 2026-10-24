@@ -16,9 +16,12 @@ end
 simdsortperm(v::Vector{Float128}; rev::Bool=false, ntasks::Integer=1) =
     simdsortperm(map(key, v); rev, ntasks)
 
+@inline qwords(x::Float128) = (k = key(x); ((k >> 64) % UInt64, k % UInt64))
+
 function simdsort!(v::Vector{Float128}; rev::Bool=false, ntasks::Integer=1)
-    SIMDQuickSort.permute_by!(v, simdsortperm(v; rev, ntasks), Int(ntasks))
-    return v
+    length(v) <= 1 && return v
+    nt = Int(ntasks)
+    return SIMDQuickSort.sort_by_words!(v, qwords, rev, nt)
 end
 
 end

@@ -87,6 +87,7 @@ function hash_count_sort!(v::Vector{T}, rev::Bool, ntasks::Int) where {T<:SortTy
     k = reinterpret(U, v)
     est = chao1([k[i] for i in 1:(n ÷ HASH_SAMPLE):n])
     est > HASH_MAXK && return false
+    count!(:hash_attempts)
     cap = max(1 << 10, nextpow(2, ceil(Int, 4 * est)))
     chunks = collect(Iterators.partition(1:n, cld(n, max(1, ntasks))))
     tables = [CountTable{U}(cap) for _ in chunks]
@@ -98,7 +99,7 @@ function hash_count_sort!(v::Vector{T}, rev::Bool, ntasks::Int) where {T<:SortTy
             Threads.@spawn ok[i] = count_into!(tables[i], k, c)
         end
     end
-    all(ok) || return false
+    all(ok) || (count!(:hash_aborts); return false)
     # Merge the tables (few entries each).
     total = Dict{U,Int}()
     for t in tables, s in eachindex(t.counts)
@@ -112,6 +113,8 @@ function hash_count_sort!(v::Vector{T}, rev::Bool, ntasks::Int) where {T<:SortTy
     # (New names: the closure below must not capture reassigned variables.)
     svals, scnts = vals[p], cnts[p]
     # Write the runs, by up to ntasks tasks over equal slices of v.
+    count!(:hash_sorts)
+    count!(:hash_distinct_keys, length(svals))
     starts = cumsum([1; scnts[1:end-1]])
     foreach_range(n, ntasks) do r
         j = searchsortedlast(starts, first(r))

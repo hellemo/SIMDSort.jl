@@ -57,18 +57,44 @@ end
     return packcomponents(acc, pos + w, Base.tail(cs))
 end
 
+# Keys of at most 128 bits: shift the components into one UInt128 (straight-line
+# code; putbits' loop indexes the word tuple at run time and is 6× slower).
+@inline pack128(acc::UInt128, pos::Int, ::Tuple{}) = (acc, pos)
+@inline function pack128(acc::UInt128, pos::Int, cs::Tuple)
+    c = first(cs)
+    w = fixedwidth(typeof(c))
+    k = UInt128(fixedkey(c)) & (w >= 128 ? typemax(UInt128) : (UInt128(1) << w) - 1)
+    return pack128((acc << w) | k, pos + w, Base.tail(cs))
+end
+@inline function packwords(x, ::Val{M}) where {M}
+    if M <= 2
+        acc, B = pack128(zero(UInt128), 0, astuple(x))
+        acc <<= 128 - B
+        return M == 1 ? ((acc >> 64) % UInt64,) : ((acc >> 64) % UInt64, acc % UInt64)
+    end
+    return packcomponents(ntuple(_ -> zero(UInt64), Val(M)), 0, astuple(x))
+end
+
 @inline astuple(x::Tuple) = x
 @inline astuple(x::Pair) = (x.first, x.second)
 
-function packed_tuple_sortperm(v::Vector{T}, ::Val{M}, rev::Bool, ntasks::Int) where {T,M}
+function packed_words(v::Vector{T}, ::Val{M}, ntasks::Int) where {T,M}
     w = Vector{NTuple{M,UInt64}}(undef, length(v))
     foreach_range(length(v), ntasks) do r
         @inbounds for i in r
-            w[i] = packcomponents(ntuple(_ -> zero(UInt64), Val(M)), 0, astuple(v[i]))
+            w[i] = packwords(v[i], Val(M))
         end
     end
-    return wordkeys_sortperm(w; rev, ntasks)
+    return w
 end
+
+# The packed order words of one tuple or pair, as a callable for sort_by_words!.
+struct Packer{M} end
+packer(::Val{M}) where {M} = Packer{M}()
+@inline (::Packer{M})(x) where {M} = packwords(x, Val(M))
+
+packed_tuple_sortperm(v::Vector{T}, ::Val{M}, rev::Bool, ntasks::Int) where {T,M} =
+    wordkeys_sortperm(packed_words(v, Val(M), ntasks); rev, ntasks)
 
 function simdsortperm(v::Vector{T}; rev::Bool=false, ntasks::Integer=1) where {T<:TupleLike}
     n = length(v)
@@ -88,6 +114,11 @@ end
 
 function simdsort!(v::Vector{T}; rev::Bool=false, ntasks::Integer=1) where {T<:TupleLike}
     (isconcretetype(T) && ncomponents(T) > 0) || return sort!(v; rev)
+    B = packedwidth(T)
+    if B !== nothing && length(v) > 1
+        # Packed keys: distribute, then sort the buckets in cache (msd.jl).
+        return sort_by_words!(v, packer(Val(cld(B, 64))), rev, Int(ntasks))
+    end
     permute_by!(v, simdsortperm(v; rev, ntasks), Int(ntasks))
     return v
 end

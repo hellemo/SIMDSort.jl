@@ -38,10 +38,35 @@ function simdsortperm(v::Vector{T}; rev::Bool=false, ntasks::Integer=1) where {T
     return refine!(WideIntKeys(v, rev), collect(1:length(v)), 0, Int(ntasks))
 end
 
+# Order words of a wide integer: its unsigned form (sign bit flipped if signed),
+# most significant 64 bits first.
+# (A plain function, not @generated: a generator could not call methods of
+# integer types defined in packages loaded later, such as BitIntegers.)
+@generated nwords(::Type{T}) where {T} = :(Val($(8sizeof(T) ÷ 64)))   # sizeof is a builtin
+
+@inline function intwords(x::T) where {T}
+    W = 8sizeof(T)
+    u0 = x % typeof(unsigned(x))
+    # One assignment: the closure below must not capture a reassigned variable.
+    u = T <: Signed ? u0 ⊻ (one(u0) << (W - 1)) : u0
+    return ntuple(k -> (u >> (W - 64k)) % UInt64, nwords(T))
+end
+
 function simdsort!(v::Vector{T}; rev::Bool=false, ntasks::Integer=1) where {T<:Union{Signed,Unsigned}}
     iswideint(T) || return sort!(v; rev)
-    permute_by!(v, simdsortperm(v; rev, ntasks), Int(ntasks))
-    return v
+    (8sizeof(T)) % 64 == 0 || return permute_by!(v, simdsortperm(v; rev, ntasks), Int(ntasks))
+    return sort_by_words!(v, intwords, rev, Int(ntasks))
+end
+
+# The order words of every element, computed by up to `ntasks` tasks.
+function words_of(f::F, v::AbstractVector, ntasks::Int) where {F}
+    w = Vector{typeof(f(first(v)))}(undef, length(v))
+    foreach_range(length(v), ntasks) do r
+        @inbounds for i in r
+            w[i] = f(v[i])
+        end
+    end
+    return w
 end
 
 # --- byte encodings ------------------------------------------------------------
@@ -149,10 +174,11 @@ Keys given as `M` big-endian 64-bit words each (most significant first), for
 types whose order key is wider than 128 bits, such as MultiFloats with three or
 more limbs. Package extensions build the words.
 """
-struct WordKeys{M} <: KeySource
-    w::Vector{NTuple{M,UInt64}}
+struct WordKeys{M,V<:AbstractVector{NTuple{M,UInt64}}} <: KeySource
+    w::V
     rev::Bool
 end
+WordKeys{M}(w::AbstractVector{NTuple{M,UInt64}}, rev::Bool) where {M} = WordKeys{M,typeof(w)}(w, rev)
 
 keywidth(::WordKeys{M}) where {M} = 64M
 @inline exhausted(ks::WordKeys, i::Int, off::Int) = off >= keywidth(ks)
@@ -176,7 +202,7 @@ end
 
 Stable sort permutation of multi-word keys; see [`WordKeys`](@ref).
 """
-function wordkeys_sortperm(w::Vector{NTuple{M,UInt64}}; rev::Bool=false, ntasks::Integer=1) where {M}
+function wordkeys_sortperm(w::AbstractVector{NTuple{M,UInt64}}; rev::Bool=false, ntasks::Integer=1) where {M}
     length(w) <= 1 && return collect(1:length(w))
     return refine!(WordKeys{M}(w, rev), collect(1:length(w)), 0, Int(ntasks))
 end

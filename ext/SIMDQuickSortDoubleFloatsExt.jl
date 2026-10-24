@@ -23,9 +23,20 @@ end
 simdsortperm(v::Vector{<:DF}; rev::Bool=false, ntasks::Integer=1) =
     simdsortperm(packed(v); rev, ntasks)
 
+# Order words for the MSD distribution of sort! (SIMDQuickSort.sort_by_words!).
+@inline function dfwords(x::DoubleFloat{Float64})
+    isnan(x) && return (typemax(UInt64), typemax(UInt64))
+    return (word(UInt64, x.hi), word(UInt64, x.lo))
+end
+@inline function dfwords(x::DoubleFloat{Float32})
+    isnan(x) && return (typemax(UInt64),)
+    return ((UInt64(word(UInt32, x.hi)) << 32) | UInt64(word(UInt32, x.lo)),)
+end
+
 function simdsort!(v::Vector{<:DF}; rev::Bool=false, ntasks::Integer=1)
-    SIMDQuickSort.permute_by!(v, simdsortperm(v; rev, ntasks), Int(ntasks))
-    return v
+    length(v) <= 1 && return v
+    nt = Int(ntasks)
+    return SIMDQuickSort.sort_by_words!(v, dfwords, rev, nt)
 end
 
 end

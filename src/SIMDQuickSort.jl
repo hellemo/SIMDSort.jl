@@ -25,6 +25,7 @@ using SIMD
 
 export simdsort!, simdsort, simdsortperm
 
+include("instrument.jl")
 include("keys.jl")
 include("network.jl")
 include("partition.jl")
@@ -32,6 +33,7 @@ include("sort.jl")
 include("parallel.jl")
 include("perm.jl")
 include("hashcount.jl")
+include("msd.jl")
 include("wide.jl")
 include("compound.jl")
 
@@ -52,17 +54,18 @@ end
 function simdsort!(v::Vector{T}; rev::Bool=false, ntasks::Integer=1) where {T<:SortTypes}
     n = length(v)
     n <= 1 && return v
-    counting_sort!(v, rev, Int(ntasks)) && return v
+    @phase(:counting_check, counting_sort!(v, rev, Int(ntasks))) && return v
     # Check for sorted input before the key map, which preserves the order.
-    presorted!(v, rev) && return v
-    hash_count_sort!(v, rev, Int(ntasks)) && return v
+    @phase(:presorted_check, presorted!(v, rev)) && return v
+    @phase(:hash_check, hash_count_sort!(v, rev, Int(ntasks))) && return v
     S = signedkey(T)
     GC.@preserve v begin
         p = Ptr{S}(pointer(v))
         k = unsafe_wrap(Array, p, n)
-        foreach_chunk(k -> map_keys!(k, T, rev), k, ntasks)
-        sort_keys!(p, n, Int(ntasks))
-        foreach_chunk(k -> unmap_keys!(k, T, rev), k, ntasks)
+        @phase :keymap foreach_chunk(k -> map_keys!(k, T, rev), k, ntasks)
+        (use_distribution(S, n, Int(ntasks)) && @phase(:distribution, distribute_sort!(p, n, Int(ntasks)))) ||
+            @phase(:quicksort, sort_keys!(p, n, Int(ntasks)))
+        @phase :keyunmap foreach_chunk(k -> unmap_keys!(k, T, rev), k, ntasks)
     end
     return v
 end
@@ -74,10 +77,11 @@ end
 function simdsort!(v::Vector{UInt32}; rev::Bool=false, ntasks::Integer=1)
     n = length(v)
     n <= 1 && return v
-    counting_sort!(v, rev, Int(ntasks)) && return v
-    hash_count_sort!(v, rev, Int(ntasks)) && return v
+    @phase(:counting_check, counting_sort!(v, rev, Int(ntasks))) && return v
+    @phase(:hash_check, hash_count_sort!(v, rev, Int(ntasks))) && return v
     rev && foreach_chunk(complement!, v, ntasks)
-    GC.@preserve v (presorted!(v) || sort_keys!(pointer(v), n, Int(ntasks)))
+    GC.@preserve v (@phase(:presorted_check, presorted!(v)) ||
+                    @phase(:quicksort, sort_keys!(pointer(v), n, Int(ntasks))))
     rev && foreach_chunk(complement!, v, ntasks)
     return v
 end
@@ -86,18 +90,18 @@ end
 # (an exact involution), and since compares treat -0.0 == 0.0, the run of zeros
 # is rewritten in `isless` order afterwards from a count of the -0.0s.
 function simdsort!(v::Vector{T}; rev::Bool=false, ntasks::Integer=1) where {T<:Union{Float32,Float64}}
-    nnan, nneg, npos = float_scan(v, ntasks)
-    r = nnan == 0 ? eachindex(v) : nan_partition!(v, rev)
+    nnan, nneg, npos = @phase :float_scan float_scan(v, ntasks)
+    r = nnan == 0 ? eachindex(v) : @phase(:nan_partition, nan_partition!(v, rev))
     n = length(r)
     n <= 1 && return v
     GC.@preserve v begin
         p = pointer(v, first(r))
         k = unsafe_wrap(Array, p, n)
-        hash_count_sort!(k, rev, Int(ntasks)) && return v
+        @phase(:hash_check, hash_count_sort!(k, rev, Int(ntasks))) && return v
         rev && foreach_chunk(negate!, k, ntasks)
-        presorted!(k) || sort_keys!(p, n, Int(ntasks))
+        @phase(:presorted_check, presorted!(k)) || @phase(:quicksort, sort_keys!(p, n, Int(ntasks)))
         # After negation (rev) the +0.0s of the input are the -0.0s.
-        order_zeros!(k, rev ? npos : nneg)
+        @phase :order_zeros order_zeros!(k, rev ? npos : nneg)
         rev && foreach_chunk(negate!, k, ntasks)
     end
     return v

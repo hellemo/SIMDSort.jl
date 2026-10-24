@@ -17,6 +17,7 @@ with the keys `≤ pivot` in `[m, n)`; both sets have the same size, `X`, and ea
 task swaps an equal slice of them.
 """
 function ppartition!(p::Ptr{T}, n::Int, pivot::T, ntasks::Int) where {T}
+    count!(:parallel_partitions)
     bounds = [div(n * i, ntasks) for i in 0:ntasks]
     counts = Vector{Int}(undef, ntasks)
     @sync for i in 1:ntasks
@@ -147,6 +148,7 @@ function pqsort!(p::Ptr{T}, n::Int, depth::Int, s::UInt64, ntasks::Int, total::I
             small = min(a, n - b)
             ps, pl, nl = a <= n - b ? (p, p + b * sizeof(T), n - b) : (p + b * sizeof(T), p, a)
             s = xorshift(s)
+            count!(:spawned_tasks)
             push!(tasks, Threads.@spawn pqsort!($ps, $small, $depth, $s, $ntasks, $total))
             p, n = pl, nl
         end

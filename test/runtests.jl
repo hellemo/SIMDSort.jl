@@ -304,6 +304,55 @@ end
         end
     end
 
+    @testset "MSD distribution for wide keys (sort!)" begin
+        n = 3 * 10^5 + 11       # above MSD_MINN
+        sameS(v; rev=false, nt=1) = isequal(simdsort(v; rev, ntasks=nt), sort(v; rev))
+        cases = Any[rand(rng, Int128, n), rand(rng, Int128(-1000):Int128(1000), n),
+                    rand(rng, UInt256, n), rand(rng, rand(rng, Int128, 7), n),
+                    Int128(2)^100 .+ rand(rng, Int128(0):Int128(10)^6, n),     # long common prefix
+                    rand(rng, UInt128(0):UInt128(3), n) .<< 64 .+ rand(rng, UInt128, n) .>> 64,
+                    Float128.(randn(rng, n)), [Float128(rand(rng, [0.0, -0.0, 1.0, NaN, -Inf])) for _ in 1:n],
+                    Double64.(randn(rng, n)) .+ Double64.(randn(rng, n)) .* 1e-20,
+                    Float64x3.(randn(rng, n)),
+                    collect(zip(rand(rng, 1:50, n), randn(rng, n))),
+                    [rand(rng, Int16) => rand(rng, UInt64) for _ in 1:n],
+                    collect(zip(rand(rng, Bool, n), rand(rng, 'a':'z', n), rand(rng, Int32, n))),
+                    # Equal windows within a bucket (tie runs), resolved by the low word.
+                    rand(rng, UInt128(1):UInt128(1000), n) .<< 64 .| rand(rng, UInt128(0):UInt128(3), n),
+                    rand(rng, UInt128(1):UInt128(1000), n) .<< 64 .| rand(rng, UInt64, n),
+                    sort(rand(rng, Int128, n)), sort(rand(rng, Int128, n); rev=true), fill(Int128(5), n),
+                    [rand(rng, Int32(1):Int32(500)) => rand(rng, Int64(0):Int64(2)) for _ in 1:n]]
+        for v in cases, rev in (false, true), nt in (1, 3, 8)
+            @test sameS(v; rev, nt)
+        end
+    end
+
+    @testset "distribution top level (64-bit keys)" begin
+        old = SIMDQuickSort.DIST_MINN[]
+        SIMDQuickSort.DIST_MINN[] = 1
+        try
+            n = 2 * 10^5 + 3
+            for v in Any[rand(rng, Int64, n), rand(rng, UInt64, n), rand(rng, Int64(-50):Int64(50), n) .* 10^15,
+                         round.(Int64, randn(rng, n) .* 1e9), [rand(rng, Bool) ? typemin(Int64) : rand(rng, Int64) for _ in 1:n]],
+                rev in (false, true), nt in (8, 13)
+                @test simdsort(v; rev, ntasks = nt) == sort(v; rev)
+            end
+            r = SIMDQuickSort.instrumented(() -> simdsort!(rand(rng, UInt64, n); ntasks = 8))
+            @test get(r.counters, :dist_sorts, 0) == 1
+        finally
+            SIMDQuickSort.DIST_MINN[] = old
+        end
+    end
+
+    @testset "instrumentation" begin
+        r = SIMDQuickSort.instrumented(() -> simdsort!(rand(rng, Int128, 10^5); ntasks = 4))
+        @test issorted(r.result)
+        @test r.counters[:msd_sorts] == 1 && haskey(r.phases, :msd_finish)
+        io = IOBuffer(); SIMDQuickSort.print_report(io, r)
+        @test occursin("msd_scatter", String(take!(io)))
+        @test !SIMDQuickSort.INSTR[]
+    end
+
     @testset "Dates, Tuples, Pairs, VersionNumber" begin
         same(v; rev=false, nt=1) = simdsortperm(v; rev, ntasks=nt) == sortperm(v; rev) &&
                                    isequal(simdsort(v; rev, ntasks=nt), sort(v; rev))
