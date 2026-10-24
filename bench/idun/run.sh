@@ -53,16 +53,19 @@ step_env() {
       echo; $JL --version; gcc --version | head -1; cmake --version | head -1
       for r in . ../ChapelSort.jl ../SIMD.jl; do echo "$r: $(git -C $r rev-parse --short HEAD 2>/dev/null || echo 'no git')"; done
     } > "$OUT/system.txt" 2>&1
-    $JL --project=. $HERE/env.jl > "$OUT/julia_env.txt" 2>&1
+    $JL --project=$ENVDIR $HERE/env.jl > "$OUT/julia_env.txt" 2>&1
 }
 step_setup() {
     $JL --version
     # stdin from /dev/null: a credentials prompt fails at once instead of hanging.
     $JL --project=$ENVDIR -e 'using Pkg; println("depot: ", DEPOT_PATH[1]);
         println("registries: ", join([r.name for r in Pkg.Registry.reachable_registries()], ", "));
-        Pkg.instantiate(); Pkg.precompile()' < /dev/null
+        Pkg.resolve(); Pkg.instantiate(); Pkg.precompile()' < /dev/null
 }
-step_test()  { $JL --project=. -e 'using Pkg; Pkg.test()'; }
+# The test suite in the lean environment (it has all test dependencies and
+# uses the synced SIMD.jl fork; Pkg.test() would resolve the package's own
+# environment and fetch the fork from GitHub).
+step_test()  { JULIA_NUM_THREADS=8 $JL --project=$ENVDIR -e 'include("test/runtests.jl")'; }
 step_build() { ../ChapelSort.jl/bench/simd/build.sh; }
 step_codegen()    { $JL --project=$ENVDIR $HERE/codegen.jl; }
 step_avx512()     { $JL -t $NT --project=$ENVDIR bench/avx512.jl all; }
