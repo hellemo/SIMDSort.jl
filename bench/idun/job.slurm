@@ -4,8 +4,9 @@
 # Set the account and partition; ask for a whole node so the thread scaling
 # and the memory bandwidth are not shared with other jobs.
 #SBATCH --job-name=simdsort-avx512
-#SBATCH --account=CHANGE_ME
+#SBATCH --account=sintef
 #SBATCH --partition=CPUQ
+#SBATCH --constraint=pec6520
 #SBATCH --nodes=1
 #SBATCH --exclusive
 #SBATCH --mem=0

@@ -54,7 +54,7 @@ step_crossover()  { $JL -t $NT --project=bench bench/crossover.jl 3 $XMAX; }
 
 printf "step\tstatus\tseconds\n" >> "$OUT/steps.tsv"
 for s in "${STEPS[@]}"; do
-    echo "== $s ($(date +%T))"
+    echo "== $s ($(date +%T)), log: $OUT/$s.log"
     t0=$(date +%s)
     "step_$s" > "$OUT/$s.log" 2>&1
     st=$?
