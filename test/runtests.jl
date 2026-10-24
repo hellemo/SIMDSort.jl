@@ -1,4 +1,4 @@
-using SIMDQuickSort
+using SIMDSort
 using Test
 using Random
 using BitIntegers
@@ -52,16 +52,16 @@ function check(v; rev=false)
     return ok
 end
 
-@testset "SIMDQuickSort" begin
+@testset "SIMDSort" begin
     rng = Xoshiro(42)
     @testset "keys round trip $T" for T in TYPES
         v = gen(T, :special, 1000, rng)
         for rev in (false, true)
-            S = SIMDQuickSort.signedkey(T)
+            S = SIMDSort.signedkey(T)
             k = copy(reinterpret(S, filter(x -> !(x isa AbstractFloat && isnan(x)), v)))
             k0 = copy(k)
-            SIMDQuickSort.map_keys!(k, T, rev)
-            SIMDQuickSort.unmap_keys!(k, T, rev)
+            SIMDSort.map_keys!(k, T, rev)
+            SIMDSort.unmap_keys!(k, T, rev)
             @test k == k0
         end
     end
@@ -70,31 +70,31 @@ end
         # 0-1 principle: the column network sorts every 0/1 input of 16 keys.
         @test all(0:(2^16 - 1)) do m
             x = [(m >> i) & 1 for i in 0:15]
-            for (a, b) in SIMDQuickSort.batcher_pairs(16)
+            for (a, b) in SIMDSort.batcher_pairs(16)
                 x[a+1] > x[b+1] && ((x[a+1], x[b+1]) = (x[b+1], x[a+1]))
             end
             issorted(x)
         end
         @testset "small_sort! $T" for T in (Int32, Int64)
-            buf = Vector{T}(undef, SIMDQuickSort.basecase_max(T))
-            @test all(Iterators.product(0:SIMDQuickSort.basecase_max(T), 1:20)) do (n, t)
+            buf = Vector{T}(undef, SIMDSort.basecase_max(T))
+            @test all(Iterators.product(0:SIMDSort.basecase_max(T), 1:20)) do (n, t)
                 a = isodd(t) ? rand(rng, T, n) : rand(rng, T(-2):T(2), n)
                 t == 2 && (a = rand(rng, [typemin(T), typemax(T)], n))
                 b = copy(a)
-                GC.@preserve b buf SIMDQuickSort.small_sort!(pointer(b), n, pointer(buf))
+                GC.@preserve b buf SIMDSort.small_sort!(pointer(b), n, pointer(buf))
                 b == sort(a)
             end
         end
     end
 
     @testset "partition! $T U=$U PF=$PF" for T in (Int32, Int64), U in (1, 2, 4, 8), PF in (false, true)
-        N = SIMDQuickSort.lanes(T)
+        N = SIMDSort.lanes(T)
         buf = Vector{T}(undef, (2U + 1) * N)
         @test all(Iterators.product(2U*N:2U*N+200, 1:6)) do (n, t)
             a = t <= 2 ? rand(rng, T(-3):T(3), n) : rand(rng, T, n)
             piv = t == 3 ? maximum(a) : t == 4 ? minimum(a) : a[rand(rng, 1:n)]
             b = copy(a)
-            m = GC.@preserve b buf SIMDQuickSort.partition!(pointer(b), n, piv, pointer(buf), Val(U), Val(PF))
+            m = GC.@preserve b buf SIMDSort.partition!(pointer(b), n, piv, pointer(buf), Val(U), Val(PF))
             all(<=(piv), view(b, 1:m)) && all(>(piv), view(b, m+1:n)) && sort(b) == sort(a)
         end
     end
@@ -117,15 +117,15 @@ end
     end
 
     @testset "partition3! $T PF=$PF" for T in (Int32, Int64, UInt32, Float32, Float64), PF in (false, true)
-        N = SIMDQuickSort.lanes(T)
-        U = SIMDQuickSort.UNROLL
-        buf = SIMDQuickSort.scratch(T)
+        N = SIMDSort.lanes(T)
+        U = SIMDSort.UNROLL
+        buf = SIMDSort.scratch(T)
         vals = T <: AbstractFloat ? T[-1, -0.0, 0.0, 1, 2] : T[1, 2, 3, 5]
         @test all(Iterators.product(2U*N:2U*N+300, 1:3)) do (n, t)
             a = t == 1 ? rand(rng, vals, n) : t == 2 ? rand(rng, T, n) : fill(vals[2], n)
             piv = a[rand(rng, 1:n)]
             b = copy(a)
-            x, y = GC.@preserve b buf SIMDQuickSort.partition3!(pointer(b), n, piv, pointer(buf),
+            x, y = GC.@preserve b buf SIMDSort.partition3!(pointer(b), n, piv, pointer(buf),
                                                                   Val(U), Val(PF))
             # Equal keys are refilled with the pivot value, so for floats the
             # signs of zeros may change; compare as numbers.
@@ -139,7 +139,7 @@ end
             a = gen(T, dist, n, rng)
             piv = a[rand(rng, 1:n)]
             b = copy(a)
-            m = GC.@preserve b SIMDQuickSort.ppartition!(pointer(b), n, piv, ntasks)
+            m = GC.@preserve b SIMDSort.ppartition!(pointer(b), n, piv, ntasks)
             @test all(<=(piv), view(b, 1:m)) && all(>(piv), view(b, m+1:n))
             @test sort!(b) == sort!(a)
         end
@@ -209,10 +209,10 @@ end
         # A zero depth budget sends every range to the fallback.
         v = rand(rng, Int32, 10^4)
         w = copy(v)
-        buf = SIMDQuickSort.scratch(Int32)
-        GC.@preserve w buf SIMDQuickSort.qsort!(pointer(w), length(w), pointer(buf), 0, UInt64(1))
+        buf = SIMDSort.scratch(Int32)
+        GC.@preserve w buf SIMDSort.qsort!(pointer(w), length(w), pointer(buf), 0, UInt64(1))
         @test w == sort(v)
-        GC.@preserve w SIMDQuickSort.pqsort!(pointer(v), length(v), 1, UInt64(1), 4, length(v))
+        GC.@preserve w SIMDSort.pqsort!(pointer(v), length(v), 1, UInt64(1), 4, length(v))
         @test v == sort(w)
     end
 
@@ -328,8 +328,8 @@ end
     end
 
     @testset "distribution top level (64-bit keys)" begin
-        old = SIMDQuickSort.DIST_MINN[]
-        SIMDQuickSort.DIST_MINN[] = 1
+        old = SIMDSort.DIST_MINN[]
+        SIMDSort.DIST_MINN[] = 1
         try
             n = 2 * 10^5 + 3
             for v in Any[rand(rng, Int64, n), rand(rng, UInt64, n), rand(rng, Int64(-50):Int64(50), n) .* 10^15,
@@ -337,20 +337,20 @@ end
                 rev in (false, true), nt in (8, 13)
                 @test simdsort(v; rev, ntasks = nt) == sort(v; rev)
             end
-            r = SIMDQuickSort.instrumented(() -> simdsort!(rand(rng, UInt64, n); ntasks = 8))
+            r = SIMDSort.instrumented(() -> simdsort!(rand(rng, UInt64, n); ntasks = 8))
             @test get(r.counters, :dist_sorts, 0) == 1
         finally
-            SIMDQuickSort.DIST_MINN[] = old
+            SIMDSort.DIST_MINN[] = old
         end
     end
 
     @testset "instrumentation" begin
-        r = SIMDQuickSort.instrumented(() -> simdsort!(rand(rng, Int128, 10^5); ntasks = 4))
+        r = SIMDSort.instrumented(() -> simdsort!(rand(rng, Int128, 10^5); ntasks = 4))
         @test issorted(r.result)
         @test r.counters[:msd_sorts] == 1 && haskey(r.phases, :msd_finish)
-        io = IOBuffer(); SIMDQuickSort.print_report(io, r)
+        io = IOBuffer(); SIMDSort.print_report(io, r)
         @test occursin("msd_scatter", String(take!(io)))
-        @test !SIMDQuickSort.INSTR[]
+        @test !SIMDSort.INSTR[]
     end
 
     @testset "Dates, Tuples, Pairs, VersionNumber" begin

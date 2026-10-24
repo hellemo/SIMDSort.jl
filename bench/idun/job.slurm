@@ -1,6 +1,6 @@
 #!/bin/bash
 # Slurm job for the AVX-512 measurements on Idun (docs/AVX512.md).
-#   cd sortbench/SIMDQuickSort.jl && sbatch bench/idun/job.slurm
+#   cd sortbench/SIMDSort.jl && sbatch bench/idun/job.slurm
 # Set the account and partition; ask for a whole node so the thread scaling
 # and the memory bandwidth are not shared with other jobs.
 #SBATCH --job-name=simdsort-avx512

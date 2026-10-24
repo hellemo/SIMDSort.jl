@@ -5,8 +5,8 @@
 #
 #   julia --project=bench bench/profile.jl
 
-using SIMDQuickSort, Profile, Printf, Random
-const Q = SIMDQuickSort
+using SIMDSort, Profile, Printf, Random
+const Q = SIMDSort
 
 const COMPONENTS = (:partition!, :small_sort!, :choose_pivot, :vextrema, :map_keys!,
                     :unmap_keys!, :float_scan, :nan_partition!, :negate!, :order_zeros!,

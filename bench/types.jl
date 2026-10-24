@@ -1,5 +1,5 @@
 # sort! and sortperm for strings, symbols, wide and arbitrary-precision numbers:
-# SIMDQuickSort against Base and ChapelSort.jl (which falls back to Base for the
+# SIMDSort against Base and ChapelSort.jl (which falls back to Base for the
 # types it does not radix sort).
 #
 #   julia -t 8 --project=bench bench/types.jl [rounds=3]
@@ -8,7 +8,7 @@
 # runs the methods in a shuffled order; the best round is reported. Writes
 # bench/results/types.csv.
 
-using SIMDQuickSort, ChapelSort, BitIntegers, DoubleFloats, MultiFloats, Quadmath, Dates, Printf, Random, Statistics
+using SIMDSort, ChapelSort, BitIntegers, DoubleFloats, MultiFloats, Quadmath, Dates, Printf, Random, Statistics
 
 const ROUNDS = length(ARGS) >= 1 ? parse(Int, ARGS[1]) : 3
 const NT = Threads.nthreads()
@@ -44,8 +44,8 @@ methods(sortonly) = [
     ("Base", 1, sortonly ? sort! : sortperm),
     ("ChapelSort.jl", 1, sortonly ? (v -> psort!(v; ntasks = 1)) : (v -> psortperm(v; ntasks = 1))),
     ("ChapelSort.jl", NT, sortonly ? (v -> psort!(v; ntasks = NT)) : (v -> psortperm(v; ntasks = NT))),
-    ("SIMDQuickSort.jl", 1, sortonly ? (v -> simdsort!(v; ntasks = 1)) : (v -> simdsortperm(v; ntasks = 1))),
-    ("SIMDQuickSort.jl", NT, sortonly ? (v -> simdsort!(v; ntasks = NT)) : (v -> simdsortperm(v; ntasks = NT))),
+    ("SIMDSort.jl", 1, sortonly ? (v -> simdsort!(v; ntasks = 1)) : (v -> simdsortperm(v; ntasks = 1))),
+    ("SIMDSort.jl", NT, sortonly ? (v -> simdsort!(v; ntasks = NT)) : (v -> simdsortperm(v; ntasks = NT))),
 ]
 
 const ROWS = NamedTuple{(:case, :op, :method, :nthreads, :n, :best, :median),

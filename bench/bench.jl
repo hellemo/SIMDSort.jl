@@ -1,4 +1,4 @@
-# SIMDQuickSort vs Base, ChapelSort.jl, and two C++ SIMD quicksorts: Intel's
+# SIMDSort vs Base, ChapelSort.jl, and two C++ SIMD quicksorts: Intel's
 # x86-simd-sort (OpenMP parallel) and Google Highway's vqsort (single-threaded).
 # The C++ sorts are called through the shim library built by ChapelSort.jl's
 # bench/simd/build.sh (set SIMDSORT_LIB to use another copy).
@@ -14,7 +14,7 @@
 #
 # Writes bench/results/bench.csv and prints a Markdown table.
 
-using SIMDQuickSort, ChapelSort, Libdl, Printf, Random, Statistics
+using SIMDSort, ChapelSort, Libdl, Printf, Random, Statistics
 
 const ROUNDS = length(ARGS) >= 1 ? parse(Int, ARGS[1]) : 9
 const BASE_ROUNDS = min(ROUNDS, 5)      # Base.sort! is slow; fewer rounds
@@ -45,8 +45,8 @@ const METHODS = [
     ("Base.sort!", 1, sort!),
     ("ChapelSort.jl psort!", 1, v -> psort!(v; ntasks = 1)),
     ("ChapelSort.jl psort!", NT, v -> psort!(v; ntasks = NT)),
-    ("SIMDQuickSort.jl", 1, v -> simdsort!(v; ntasks = 1)),
-    ("SIMDQuickSort.jl", NT, v -> simdsort!(v; ntasks = NT)),
+    ("SIMDSort.jl", 1, v -> simdsort!(v; ntasks = 1)),
+    ("SIMDSort.jl", NT, v -> simdsort!(v; ntasks = NT)),
     ("x86-simd-sort", 1, v -> xss!(v, 1)),
     ("x86-simd-sort", NT, v -> xss!(v, NT)),
     ("Highway vqsort", 1, vqsort!),

@@ -1,4 +1,4 @@
-name = "SIMDQuickSort"
+name = "SIMDSort"
 uuid = "0db4c8ee-f0ef-4abc-a572-3607934b7ab8"
 version = "0.1.0"
 authors = ["Lars Hellemo <lars.hellemo@sintef.no>"]
@@ -14,10 +14,10 @@ MultiFloats = "bdf0d083-296b-4888-a5b6-7498122e68a5"
 Quadmath = "be4d8f0f-7fa4-5f49-b795-2f01399ab2dd"
 
 [extensions]
-SIMDQuickSortDatesExt = "Dates"
-SIMDQuickSortDoubleFloatsExt = "DoubleFloats"
-SIMDQuickSortMultiFloatsExt = "MultiFloats"
-SIMDQuickSortQuadmathExt = "Quadmath"
+SIMDSortDatesExt = "Dates"
+SIMDSortDoubleFloatsExt = "DoubleFloats"
+SIMDSortMultiFloatsExt = "MultiFloats"
+SIMDSortQuadmathExt = "Quadmath"
 
 [sources]
 SIMD = {url = "https://github.com/hellemo/SIMD.jl", rev = "permute-compress"}

@@ -10,8 +10,8 @@
 # difference of the two walls shows the probe overhead. Phase times are task
 # times summed over threads; nested phases overlap their parents.
 
-using SIMDQuickSort, Random, Printf, Dates, DoubleFloats, Quadmath, MultiFloats
-const Q = SIMDQuickSort
+using SIMDSort, Random, Printf, Dates, DoubleFloats, Quadmath, MultiFloats
+const Q = SIMDSort
 
 const OUT = get(ENV, "OUT", joinpath(@__DIR__, "results", "local"))
 mkpath(OUT)

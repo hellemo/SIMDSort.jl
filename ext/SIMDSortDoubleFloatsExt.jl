@@ -4,14 +4,14 @@
 # 0.0 tie) and the low words with `<`; zeros are canonicalized to match. NaNs
 # are put last, as for Float64. (DoubleFloats' own `isless` is not a total order
 # with NaNs, so Base.sort has no defined result to match there.)
-module SIMDQuickSortDoubleFloatsExt
+module SIMDSortDoubleFloatsExt
 
-using SIMDQuickSort, DoubleFloats
-import SIMDQuickSort: simdsort!, simdsortperm
+using SIMDSort, DoubleFloats
+import SIMDSort: simdsort!, simdsortperm
 
 const DF = Union{DoubleFloat{Float64},DoubleFloat{Float32}}
 
-@inline word(::Type{U}, x::AbstractFloat) where {U} = SIMDQuickSort.ukey(U, iszero(x) ? zero(x) : x)
+@inline word(::Type{U}, x::AbstractFloat) where {U} = SIMDSort.ukey(U, iszero(x) ? zero(x) : x)
 
 function packed(v::Vector{DoubleFloat{T}}) where {T}
     W = 8sizeof(T)
@@ -23,7 +23,7 @@ end
 simdsortperm(v::Vector{<:DF}; rev::Bool=false, ntasks::Integer=1) =
     simdsortperm(packed(v); rev, ntasks)
 
-# Order words for the MSD distribution of sort! (SIMDQuickSort.sort_by_words!).
+# Order words for the MSD distribution of sort! (SIMDSort.sort_by_words!).
 @inline function dfwords(x::DoubleFloat{Float64})
     isnan(x) && return (typemax(UInt64), typemax(UInt64))
     return (word(UInt64, x.hi), word(UInt64, x.lo))
@@ -36,7 +36,7 @@ end
 function simdsort!(v::Vector{<:DF}; rev::Bool=false, ntasks::Integer=1)
     length(v) <= 1 && return v
     nt = Int(ntasks)
-    return SIMDQuickSort.sort_by_words!(v, dfwords, rev, nt)
+    return SIMDSort.sort_by_words!(v, dfwords, rev, nt)
 end
 
 end

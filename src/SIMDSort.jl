@@ -1,8 +1,11 @@
 """
-    SIMDQuickSort
+    SIMDSort
 
-A vectorized quicksort for primitive numeric vectors, written in Julia on top of
-SIMD.jl. See `docs/DESIGN.md` for the algorithm and its sources.
+Vectorized sorting in Julia on top of SIMD.jl: a vectorized quicksort for
+primitive numbers, with counting and hash counting for few distinct values,
+MSD radix refinement for `sortperm`, strings and other key types, and a
+sample-sort step for wide fixed-width types. See `docs/DESIGN.md` for the
+algorithms and their sources.
 """
 # Sources, cited in the code by these tags (full references in README.md and
 # docs/DESIGN.md):
@@ -20,7 +23,7 @@ SIMD.jl. See `docs/DESIGN.md` for the algorithm and its sources.
 # Everything else (key maps, prefetch, three-way partition, parallel partition,
 # counting sort, windowed keys, string prefix cache, bignum encodings) is this
 # package's own design or textbook technique.
-module SIMDQuickSort
+module SIMDSort
 
 using SIMD
 

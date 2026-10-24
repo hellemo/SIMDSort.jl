@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # The whole AVX-512 measurement in one go (docs/AVX512.md). Run from the
-# SIMDQuickSort.jl directory on a compute node, via job.slurm or directly:
+# SIMDSort.jl directory on a compute node, via job.slurm or directly:
 #
 #   bench/idun/run.sh [steps...]       (default: all steps, in this order)
 #

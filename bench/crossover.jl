@@ -1,4 +1,4 @@
-# Crossover between SIMDQuickSort's quicksort and ChapelSort.jl's parallel radix
+# Crossover between SIMDSort's quicksort and ChapelSort.jl's parallel radix
 # sort, over input size, number of tasks and key type, to see whether a rule
 # "use the radix sort above n₀ keys with at least t₀ tasks" exists.
 #
@@ -10,7 +10,7 @@
 # bench/results/crossover.csv and prints, per key type, the ratio
 # radix / quicksort of the best times (< 1: the radix sort is faster).
 
-using SIMDQuickSort, ChapelSort, Printf, Random, Statistics
+using SIMDSort, ChapelSort, Printf, Random, Statistics
 
 const ROUNDS = length(ARGS) >= 1 ? parse(Int, ARGS[1]) : 5
 const MAXLOG = length(ARGS) >= 2 ? parse(Int, ARGS[2]) : 28

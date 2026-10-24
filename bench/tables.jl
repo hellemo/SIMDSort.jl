@@ -38,9 +38,9 @@ function main_table()
     df = CSV.read(joinpath(RESULTS, "bench.csv"), DataFrame)
     nt = maximum(df.nthreads)
     cols = [("Base.sort!", 1, "Base 1 thr"), ("ChapelSort.jl psort!", 1, "ChapelSort 1 thr"),
-            ("SIMDQuickSort.jl", 1, "SIMDQuickSort 1 thr"), ("x86-simd-sort", 1, "x86-simd-sort 1 thr"),
+            ("SIMDSort.jl", 1, "SIMDSort 1 thr"), ("x86-simd-sort", 1, "x86-simd-sort 1 thr"),
             ("Highway vqsort", 1, "vqsort 1 thr"),
-            ("ChapelSort.jl psort!", nt, "ChapelSort $nt thr"), ("SIMDQuickSort.jl", nt, "SIMDQuickSort $nt thr"),
+            ("ChapelSort.jl psort!", nt, "ChapelSort $nt thr"), ("SIMDSort.jl", nt, "SIMDSort $nt thr"),
             ("x86-simd-sort", nt, "x86-simd-sort $nt thr")]
     # The case order of bench.jl (rows rerun with BENCH_ONLY end up last in the CSV).
     order = ["UInt64, 2^27", "Int64, 2^26", "Float64 (randn), 2^26", "UInt32, 2^26", "Int32, 2^26",
@@ -59,8 +59,8 @@ function types_table()
     df = CSV.read(joinpath(RESULTS, "types.csv"), DataFrame)
     nt = maximum(df.nthreads)
     cols = [("Base", 1, "Base 1 thr"), ("ChapelSort.jl", 1, "ChapelSort 1 thr"),
-            ("SIMDQuickSort.jl", 1, "SIMDQuickSort 1 thr"),
-            ("ChapelSort.jl", nt, "ChapelSort $nt thr"), ("SIMDQuickSort.jl", nt, "SIMDQuickSort $nt thr")]
+            ("SIMDSort.jl", 1, "SIMDSort 1 thr"),
+            ("ChapelSort.jl", nt, "ChapelSort $nt thr"), ("SIMDSort.jl", nt, "SIMDSort $nt thr")]
     keys_ = unique(zip(df.case, df.op))
     labels = ["$c, $op" for (c, op) in keys_]
     times = Matrix{Union{Missing,Float64}}(missing, length(keys_), length(cols))

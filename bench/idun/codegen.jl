@@ -6,8 +6,8 @@
 #
 #   OUT=dir julia --project=bench bench/idun/codegen.jl
 
-using SIMDQuickSort, SIMD, InteractiveUtils, Printf
-const Q = SIMDQuickSort
+using SIMDSort, SIMD, InteractiveUtils, Printf
+const Q = SIMDSort
 
 const OUT = get(ENV, "OUT", joinpath(@__DIR__, "results", "local"))
 const ASM = joinpath(OUT, "asm")

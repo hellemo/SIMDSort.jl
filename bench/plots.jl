@@ -26,7 +26,7 @@ const BLUE, ORANGE, AQUA, YELLOW, MAGENTA =
 const GRAY = colorant"#8c8a83"
 
 # One color per method, the same in every chart.
-const METHODS = ["SIMDQuickSort.jl" => BLUE, "x86-simd-sort" => ORANGE,
+const METHODS = ["SIMDSort.jl" => BLUE, "x86-simd-sort" => ORANGE,
                  "Highway vqsort" => AQUA, "ChapelSort.jl psort!" => YELLOW,
                  "ChapelSort.jl" => YELLOW, "Base.sort!" => GRAY, "Base" => GRAY]
 color_of(m) = Dict(METHODS)[m]
@@ -70,20 +70,20 @@ const SPECIAL = ["UInt64 in 0:1000, 2^26", "UInt64, 1000 random values, 2^26",
 
 function bench_plots()
     df = CSV.read(joinpath(RESULTS, "bench.csv"), DataFrame)
-    one = ["SIMDQuickSort.jl" => ("SIMDQuickSort.jl", 1), "x86-simd-sort" => ("x86-simd-sort", 1),
+    one = ["SIMDSort.jl" => ("SIMDSort.jl", 1), "x86-simd-sort" => ("x86-simd-sort", 1),
            "Highway vqsort" => ("Highway vqsort", 1), "ChapelSort.jl (radix)" => ("ChapelSort.jl psort!", 1),
            "Base.sort!" => ("Base.sort!", 1)]
     savefig("random1",
          throughput_plot(df, RANDOM, one, "Random keys, one thread",
                          "Higher is better · best of 9 rounds · $MACHINE"))
     nt = maximum(df.nthreads)
-    many = ["SIMDQuickSort.jl" => ("SIMDQuickSort.jl", nt), "x86-simd-sort" => ("x86-simd-sort", nt),
+    many = ["SIMDSort.jl" => ("SIMDSort.jl", nt), "x86-simd-sort" => ("x86-simd-sort", nt),
             "ChapelSort.jl (radix)" => ("ChapelSort.jl psort!", nt)]
     savefig("random$nt",
          throughput_plot(df, RANDOM, many, "Random keys, $nt threads",
                          "Higher is better · best of 9 rounds · $MACHINE";
                          size = (760, 500)))
-    special = [one; "SIMDQuickSort.jl, $nt thr" => ("SIMDQuickSort.jl", nt)]
+    special = [one; "SIMDSort.jl, $nt thr" => ("SIMDSort.jl", nt)]
     savefig("special",
          throughput_plot(df, SPECIAL, one, "Duplicates and presorted inputs, one thread",
                          "Higher is better · $MACHINE";
@@ -99,7 +99,7 @@ function types_plot(op)
     d.speedup = [base[r.case] / r.best for r in eachrow(d)]
     nt = maximum(d.nthreads)
     d.series = [string(r.method, ", ", r.nthreads == 1 ? "1 thread" : "$nt threads") for r in eachrow(d)]
-    labels = ["SIMDQuickSort.jl, 1 thread", "SIMDQuickSort.jl, $nt threads",
+    labels = ["SIMDSort.jl, 1 thread", "SIMDSort.jl, $nt threads",
               "ChapelSort.jl, 1 thread", "ChapelSort.jl, $nt threads"]
     colors = [BLUE, colorant"#9cc2ef", YELLOW, colorant"#f5d27a"]
     cases = unique(d.case)
@@ -122,7 +122,7 @@ function types_plot(op)
     savefig("types_$op", fig)
 end
 
-# Radix (ChapelSort) / quicksort (SIMDQuickSort) time by size and tasks.
+# Radix (ChapelSort) / quicksort (SIMDSort) time by size and tasks.
 function crossover_plot()
     df = CSV.read(joinpath(RESULTS, "crossover.csv"), DataFrame)
     q = filter(r -> r.method == "quicksort", df)

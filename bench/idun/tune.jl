@@ -39,9 +39,9 @@ function load_variant(i, (label, file, name, value))
     dir = mktempdir()
     cp(SRC, joinpath(dir, "src"))
     mod = "SQS_v$i"
-    main = joinpath(dir, "src", "SIMDQuickSort.jl")
+    main = joinpath(dir, "src", "SIMDSort.jl")
     s = read(main, String)
-    s = replace(s, r"^module SIMDQuickSort$"m => "module $mod")
+    s = replace(s, r"^module SIMDSort$"m => "module $mod")
     write(main, s)
     if !isempty(file)
         f = joinpath(dir, "src", file)
@@ -51,7 +51,7 @@ function load_variant(i, (label, file, name, value))
         write(f, replace(t, re => "const $name = $value"))
     end
     include(main)
-    return getfield(Main, Symbol(mod))
+    return Base.invokelatest(getfield, Main, Symbol(mod))
 end
 
 rng = Xoshiro(5)

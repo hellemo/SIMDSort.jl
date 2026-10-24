@@ -1,10 +1,10 @@
-# What the Julia side sees of the machine, and which code paths SIMDQuickSort
+# What the Julia side sees of the machine, and which code paths SIMDSort
 # compiles for it (bench/idun/run.sh step `env`).
 #
 #   julia --project=. bench/idun/env.jl
 
-using SIMDQuickSort, SIMD, InteractiveUtils, Printf
-const Q = SIMDQuickSort
+using SIMDSort, SIMD, InteractiveUtils, Printf
+const Q = SIMDSort
 
 versioninfo(verbose = false)
 println("LLVM: ", Base.libllvm_version, ", CPU name: ", Sys.CPU_NAME,
@@ -23,7 +23,7 @@ for f in (:sse42, :avx, :avx2, :fma, :bmi2, :avx512f, :avx512vl, :avx512dq, :avx
     @printf("  %-16s %s\n", f, v)
 end
 
-println("\nSIMDQuickSort code paths:")
+println("\nSIMDSort code paths:")
 println("  has_avx = ", Q.has_avx(), ", has_avx512 = ", Q.has_avx512())
 println("  Int64 leaves as Float64 offsets (F5): ", Q.has_avx() && !Q.has_avx512())
 println("  32-row networks split in halves (non-64-bit-int types): ", !SIMD.Targets.has_feature(:avx512f))

@@ -1,6 +1,6 @@
-# SIMDQuickSort design
+# SIMDSort design
 
-SIMDQuickSort is a vectorized quicksort written from the published descriptions
+SIMDSort is a vectorized quicksort written from the published descriptions
 below. It uses no code from Google Highway (vqsort) or Intel's x86-simd-sort. The
 SIMD primitives come from SIMD.jl, extended with runtime permutes and compress
 (`vpartition`, `vpermute`), which lower to `vpermd`/`pshufb` with a
@@ -560,7 +560,7 @@ interleaved, with fresh inputs:
 | hash counting after CAFS (§1) | 1000 random UInt64 values 0.275 → 0.126 s; 8 threads 0.139 → 0.036 s |
 | leaf-size-pruned networks (variants per register count) | rejected: −6 to −13% per isolated leaf, but +0.2 to +3.3% in full sorts (dispatch, code size) |
 
-Final: `Float64` 0.542 s, against x86-simd-sort's 0.579 s; SIMDQuickSort is the
+Final: `Float64` 0.542 s, against x86-simd-sort's 0.579 s; SIMDSort is the
 fastest one-thread sort for every numeric type measured (README).
 
 ### j. A sample-sort top level for 64-bit keys at 8 threads (disabled)
@@ -704,8 +704,8 @@ for machines where interactive profiling is impractical, such as cluster
 nodes (`bench/idun/`).
 
 ```julia
-r = SIMDQuickSort.instrumented(() -> simdsort!(v; ntasks = 8))
-SIMDQuickSort.print_report(r)    # or r.phases, r.counters
+r = SIMDSort.instrumented(() -> simdsort!(v; ntasks = 8))
+SIMDSort.print_report(r)    # or r.phases, r.counters
 ```
 
 When it is off (the default), a probe costs one load and a branch. Probes sit

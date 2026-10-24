@@ -10,8 +10,8 @@
 # 3. sort: full sorts against x86-simd-sort and Highway vqsort (rebuild the shim
 #    on the node: ChapelSort.jl/bench/simd/build.sh uses -march=native).
 
-using SIMDQuickSort, SIMD, Libdl, Printf, Random, Statistics
-const Q = SIMDQuickSort
+using SIMDSort, SIMD, Libdl, Printf, Random, Statistics
+const Q = SIMDSort
 const what = isempty(ARGS) ? "all" : ARGS[1]
 
 println("Julia $VERSION, $(Threads.nthreads()) threads")
@@ -111,11 +111,11 @@ if what in ("sort", "all")
     L = have ? dlopen(lib) : nothing
     have && println("\n3. Full sorts, 2^26 keys, best of 5 interleaved rounds (fresh input); ",
                     unsafe_string(ccall(dlsym(L, :simdsort_info), Cstring, ())))
-    have || println("\n3. Full sorts (no shim at $lib: SIMDQuickSort only)")
+    have || println("\n3. Full sorts (no shim at $lib: SIMDSort only)")
     sfx = Dict(Int32 => "i32", Float32 => "f32", Int64 => "i64", Float64 => "f64", UInt64 => "u64", UInt32 => "u32")
     nt = Threads.nthreads()
     for T in (Int32, UInt32, Float32, Int64, UInt64, Float64)
-        fs = Pair{String,Function}["SIMDQuickSort 1" => v -> simdsort!(v), "SIMDQuickSort $nt" => v -> simdsort!(v; ntasks = nt)]
+        fs = Pair{String,Function}["SIMDSort 1" => v -> simdsort!(v), "SIMDSort $nt" => v -> simdsort!(v; ntasks = nt)]
         if have
             xs = dlsym(L, Symbol("xss_sort_", sfx[T])); vq = dlsym(L, Symbol("vqsort_", sfx[T]))
             push!(fs, "x86-simd-sort 1" => v -> ccall(xs, Cvoid, (Ptr{T}, Csize_t, Cint), v, length(v), 1),

@@ -1,19 +1,19 @@
 # Dates: Date, DateTime, Time and every concrete Period type (Day, Millisecond,
 # ...) are an Int64 inside and are ordered by it. They are sorted in place as
 # Int64 keys, without copying.
-module SIMDQuickSortDatesExt
+module SIMDSortDatesExt
 
-using SIMDQuickSort, Dates
-import SIMDQuickSort: simdsort!, simdsortperm
+using SIMDSort, Dates
+import SIMDSort: simdsort!, simdsortperm
 
 const Int64Like = Union{Date,DateTime,Time,Dates.FixedPeriod,Dates.OtherPeriod}
 
 ok(::Type{T}) where {T} = isconcretetype(T) && isbitstype(T) && sizeof(T) == 8
 
 # As components of tuples and pairs.
-SIMDQuickSort.fixedwidth(::Type{T}) where {T<:Int64Like} = ok(T) ? 64 : nothing
-@inline SIMDQuickSort.fixedkey(x::T) where {T<:Int64Like} =
-    SIMDQuickSort.ukey(UInt64, reinterpret(Int64, x))
+SIMDSort.fixedwidth(::Type{T}) where {T<:Int64Like} = ok(T) ? 64 : nothing
+@inline SIMDSort.fixedkey(x::T) where {T<:Int64Like} =
+    SIMDSort.ukey(UInt64, reinterpret(Int64, x))
 
 function simdsort!(v::Vector{T}; rev::Bool=false, ntasks::Integer=1) where {T<:Int64Like}
     ok(T) || return sort!(v; rev)

@@ -3,10 +3,10 @@
 # Off by default; then every probe costs one load and branch, and probes sit only
 # at coarse steps (per pass or per partition call, never per key).
 #
-#   r = SIMDQuickSort.instrumented() do
+#   r = SIMDSort.instrumented() do
 #       simdsort!(v; ntasks = 8)
 #   end
-#   SIMDQuickSort.print_report(r)
+#   SIMDSort.print_report(r)
 #
 # Times from concurrent tasks add up (they are CPU time, not wall time). The
 # pivot, leaf_sort and partition_2e* times of small ranges are sampled

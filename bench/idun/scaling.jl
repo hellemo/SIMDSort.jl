@@ -4,12 +4,12 @@
 #
 #   OUT=dir julia -t <n> --project=bench bench/idun/scaling.jl [rounds]
 #
-# "SIMDQuickSort dist" is the sample-sort top level for 64-bit keys
+# "SIMDSort dist" is the sample-sort top level for 64-bit keys
 # (src/msd.jl), disabled by default because it loses on the 8-thread
 # development laptop; this measures whether it wins at higher thread counts.
 
-using SIMDQuickSort, ChapelSort, Libdl, Random, Statistics, Printf
-const Q = SIMDQuickSort
+using SIMDSort, ChapelSort, Libdl, Random, Statistics, Printf
+const Q = SIMDSort
 
 const OUT = get(ENV, "OUT", joinpath(@__DIR__, "results", "local"))
 mkpath(OUT)
@@ -52,11 +52,11 @@ function methods_for(x, op, nt)
     T = eltype(x)
     ms = Pair{String,Function}[]
     if op === :perm
-        push!(ms, "SIMDQuickSort" => v -> simdsortperm(v; ntasks = nt), "ChapelSort" => v -> psortperm(v; ntasks = nt))
+        push!(ms, "SIMDSort" => v -> simdsortperm(v; ntasks = nt), "ChapelSort" => v -> psortperm(v; ntasks = nt))
         return ms
     end
-    push!(ms, "SIMDQuickSort" => v -> simdsort!(v; ntasks = nt), "ChapelSort" => v -> psort!(v; ntasks = nt))
-    T in (Int64, UInt64) && push!(ms, "SIMDQuickSort dist" => v -> dist!(v, nt))
+    push!(ms, "SIMDSort" => v -> simdsort!(v; ntasks = nt), "ChapelSort" => v -> psort!(v; ntasks = nt))
+    T in (Int64, UInt64) && push!(ms, "SIMDSort dist" => v -> dist!(v, nt))
     LIB !== nothing && T in (UInt64, Int64, Float64, UInt32, Int32, Float32) && push!(ms, "x86-simd-sort" => v -> xss!(v, nt))
     return ms
 end

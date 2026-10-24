@@ -3,15 +3,15 @@
 # lower limb, as big-endian 64-bit words. MultiFloats orders like Float64 (NaN
 # last, -0.0 before 0.0 by the sign of the leading limb) and compares lower limbs
 # numerically, so zeros in the lower limbs are canonicalized. NaNs go last.
-module SIMDQuickSortMultiFloatsExt
+module SIMDSortMultiFloatsExt
 
-using SIMDQuickSort, MultiFloats
-import SIMDQuickSort: simdsort!, simdsortperm
+using SIMDSort, MultiFloats
+import SIMDSort: simdsort!, simdsortperm
 
 const MF{T,N} = MultiFloat{T,N}
 
-@inline ukey(x::Float64) = SIMDQuickSort.ukey(UInt64, x)
-@inline ukey(x::Float32) = SIMDQuickSort.ukey(UInt32, x)
+@inline ukey(x::Float64) = SIMDSort.ukey(UInt64, x)
+@inline ukey(x::Float32) = SIMDSort.ukey(UInt32, x)
 @inline canon(x) = iszero(x) ? zero(x) : x
 
 # Number of 64-bit words for N limbs of type T.
@@ -36,12 +36,12 @@ nwords(::Type{Float32}, N) = cld(N, 2)
 end
 
 simdsortperm(v::Vector{<:MF{T}}; rev::Bool=false, ntasks::Integer=1) where {T<:Union{Float32,Float64}} =
-    SIMDQuickSort.wordkeys_sortperm(map(words, v); rev, ntasks)
+    SIMDSort.wordkeys_sortperm(map(words, v); rev, ntasks)
 
 function simdsort!(v::Vector{<:MF{T}}; rev::Bool=false, ntasks::Integer=1) where {T<:Union{Float32,Float64}}
     length(v) <= 1 && return v
     nt = Int(ntasks)
-    return SIMDQuickSort.sort_by_words!(v, words, rev, nt)
+    return SIMDSort.sort_by_words!(v, words, rev, nt)
 end
 
 end
