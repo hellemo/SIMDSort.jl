@@ -1,6 +1,6 @@
 # Tuning constants on this machine. Each variant is a copy of src/ with one
-# constant changed, loaded as its own module, so that all variants run interleaved in one process (separate
-# processes drift by several percent). Writes $OUT/tune.csv with the best and
+# constant changed, loaded as its own module (variants.jl), so that all
+# variants run interleaved in one process. Writes $OUT/tune.csv with the best and
 # median time per case and variant, and prints each variant relative to the
 # baseline (the committed values).
 #
@@ -34,24 +34,7 @@ const VARIANTS = [
     ("no zigzag", "network.jl", "ZIGZAG", "Ref(false)"),
 ]
 
-function load_variant(i, (label, file, name, value))
-    dir = mktempdir()
-    cp(SRC, joinpath(dir, "src"))
-    mod = "SQS_v$i"
-    main = joinpath(dir, "src", "SIMDSort.jl")
-    s = read(main, String)
-    s = replace(s, r"^module SIMDSort$"m => "module $mod")
-    write(main, s)
-    if !isempty(file)
-        f = joinpath(dir, "src", file)
-        t = read(f, String)
-        re = Regex("^const $name = .*\$", "m")
-        occursin(re, t) || error("no `const $name` in $file")
-        write(f, replace(t, re => "const $name = $value"))
-    end
-    include(main)
-    return Base.invokelatest(getfield, Main, Symbol(mod))
-end
+include("variants.jl")
 
 rng = Xoshiro(5)
 const L = parse(Int, get(ENV, "SIZE_LOG", "26"))
@@ -100,5 +83,6 @@ function main(mods)
 end
 
 # Loaded at top level: methods defined inside main() would be too new for it.
-const MODS = [(v[1], load_variant(i, v)) for (i, v) in enumerate(VARIANTS)]
+const MODS = [(lab, load_variant(SRC, "SQS_v$i"; file, name, value))
+              for (i, (lab, file, name, value)) in enumerate(VARIANTS)]
 main(MODS)
