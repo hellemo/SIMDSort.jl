@@ -67,10 +67,9 @@ end
 bytes_of(s::Union{String,SubString{String}}) = (pointer(s), ncodeunits(s))
 bytes_of(s::Symbol) = (p = Base.unsafe_convert(Ptr{UInt8}, s); (p, Int(ccall(:strlen, Csize_t, (Ptr{UInt8},), p))))
 
-function ByteKeys(v::AbstractVector, rev::Bool, ntasks::Int)
+function ByteKeys(v::AbstractVector, rev::Bool, ntasks::Int,
+                  ptr = Vector{Ptr{UInt8}}(undef, length(v)), len = Vector{Int}(undef, length(v)))
     n = length(v)
-    ptr = Vector{Ptr{UInt8}}(undef, n)
-    len = Vector{Int}(undef, n)
     foreach_range(n, ntasks) do r
         @inbounds for i in r
             ptr[i], len[i] = bytes_of(v[i])
@@ -154,9 +153,8 @@ order) by the keys' bits from `off` on, stably.
 # The first 16 bytes of each byte string, big-endian and zero-padded. Kept aligned
 # with `perm` and permuted along with it, so that windows within them are read
 # sequentially instead of through the string pointers.
-function prefix_cache(ks::ByteKeys, ntasks::Int)
+function prefix_cache(ks::ByteKeys, ntasks::Int, pc = Vector{UInt128}(undef, length(ks.ptr)))
     n = length(ks.ptr)
-    pc = Vector{UInt128}(undef, n)
     foreach_range(n, ntasks) do r
         @inbounds for i in r
             pc[i] = (UInt128(keybits_raw(ks, i, 0)) << 64) | UInt128(keybits_raw(ks, i, 64))
@@ -196,83 +194,89 @@ function refine!(ks::KeySource, perm::AbstractVector{Int}, off::Int, ntasks::Int
     ib = 8sizeof(Int) - leading_zeros(m - 1)       # bits for local positions
     K = 64 - ib
     mask = (one(UInt64) << ib) - one(UInt64)
-    keys = Vector{UInt64}(undef, m)
-    while true
-        woff = off                  # a fresh binding per iteration for the closure
+    keys, hk = scratch_vector(UInt64, m)
+    ho = C_NULL
+    try
+        while true
+            woff = off                  # a fresh binding per iteration for the closure
+            foreach_range(m, ntasks) do r
+                @inbounds for j in r
+                    keys[j] = (window(ks, pc, perm, j, woff, K) << ib) | UInt64(j - 1)
+                end
+            end
+            # Skip bits that all keys of the run share (long common prefixes, as in
+            # "id%010d"): a window with no differences needs no sort.
+            k1 = keys[1] >> ib
+            d = mapreduce(x -> (x >> ib) ⊻ k1, |, keys)
+            if d == 0
+                off += K
+                all_exhausted(ks, perm, off) && return finish_ties!(ks, perm)
+                continue
+            end
+            c = leading_zeros(d) - (64 - K)          # common leading bits in the window
+            c < 8 && break
+            off += c
+        end
+        if INSTR[]
+            count!(:window_sorts)
+            count!(:window_keys, m)
+        end
+        simdsort!(keys; ntasks)
+        old, ho = scratch_vector(Int, m)
+        copyto!(old, perm)
         foreach_range(m, ntasks) do r
             @inbounds for j in r
-                keys[j] = (window(ks, pc, perm, j, woff, K) << ib) | UInt64(j - 1)
+                perm[j] = old[(keys[j] & mask) % Int + 1]
             end
         end
-        # Skip bits that all keys of the run share (long common prefixes, as in
-        # "id%010d"): a window with no differences needs no sort.
-        k1 = keys[1] >> ib
-        d = mapreduce(x -> (x >> ib) ⊻ k1, |, keys)
-        if d == 0
-            off += K
-            all_exhausted(ks, perm, off) && return finish_ties!(ks, perm)
-            continue
-        end
-        c = leading_zeros(d) - (64 - K)          # common leading bits in the window
-        c < 8 && break
-        off += c
-    end
-    if INSTR[]
-        count!(:window_sorts)
-        count!(:window_keys, m)
-    end
-    simdsort!(keys; ntasks)
-    old = copy(perm)
-    foreach_range(m, ntasks) do r
-        @inbounds for j in r
-            perm[j] = old[(keys[j] & mask) % Int + 1]
-        end
-    end
-    # Refine the runs with equal windows.
-    runs = UnitRange{Int}[]
-    j = 1
-    @inbounds while j <= m
-        h = keys[j] >> ib
-        k = j
-        while k < m && keys[k+1] >> ib == h
-            k += 1
-        end
-        k > j && push!(runs, j:k)
-        j = k + 1
-    end
-    isempty(runs) && return perm
-    next = off + K
-    # Each run gets its own slice of the prefix cache, gathered in its new order.
-    usepc = pc !== nothing && next < 128
-    sub(r) = usepc ? UInt128[@inbounds pc[(keys[j] & mask) % Int + 1] for j in r] : nothing
-    if ntasks <= 1 || length(runs) == 1
-        for r in runs
-            refine!(ks, view(perm, r), next, length(r) > PERM_PAR_MIN ? ntasks : 1, sub(r))
-        end
-    else
-        # Groups of runs of about equal total size, one task each.
-        total = sum(length, runs)
-        target = cld(total, 4ntasks)
-        sem = Base.Semaphore(ntasks)
-        tasks = Task[]
-        g = 1
-        while g <= length(runs)
-            h, s = g, 0
-            while h <= length(runs) && (s == 0 || s + length(runs[h]) <= target)
-                s += length(runs[h])
-                h += 1
+        # Refine the runs with equal windows.
+        runs = UnitRange{Int}[]
+        j = 1
+        @inbounds while j <= m
+            h = keys[j] >> ib
+            k = j
+            while k < m && keys[k+1] >> ib == h
+                k += 1
             end
-            group = runs[g:h-1]
-            push!(tasks, spawn_limited(sem) do
-                for r in group
-                    refine!(ks, view(perm, r), next, 1, sub(r))
+            k > j && push!(runs, j:k)
+            j = k + 1
+        end
+        isempty(runs) && return perm
+        next = off + K
+        # Each run gets its own slice of the prefix cache, gathered in its new order.
+        usepc = pc !== nothing && next < 128
+        sub(r) = usepc ? UInt128[@inbounds pc[(keys[j] & mask) % Int + 1] for j in r] : nothing
+        if ntasks <= 1 || length(runs) == 1
+            for r in runs
+                refine!(ks, view(perm, r), next, length(r) > PERM_PAR_MIN ? ntasks : 1, sub(r))
+            end
+        else
+            # Groups of runs of about equal total size, one task each.
+            total = sum(length, runs)
+            target = cld(total, 4ntasks)
+            sem = Base.Semaphore(ntasks)
+            tasks = Task[]
+            g = 1
+            while g <= length(runs)
+                h, s = g, 0
+                while h <= length(runs) && (s == 0 || s + length(runs[h]) <= target)
+                    s += length(runs[h])
+                    h += 1
                 end
-            end)
-            g = h
+                group = runs[g:h-1]
+                push!(tasks, spawn_limited(sem) do
+                    for r in group
+                        refine!(ks, view(perm, r), next, 1, sub(r))
+                    end
+                end)
+                g = h
+            end
+            foreach(wait, tasks)
         end
-        foreach(wait, tasks)
+        return perm
+    finally
+        free_scratch(hk); free_scratch(ho)
     end
-    return perm
 end
 
 # Stable insertion sort of a small run with a full comparison from bit `off`. With
@@ -322,19 +326,23 @@ cmp_cached(ks::KeySource, a, pa, b, pb) = cmp_from(ks, a, b, 0)
 
 `v .= v[p]`, gathering and copying back with up to `ntasks` tasks.
 """
-function permute_by!(v::AbstractVector, p::Vector{Int}, ntasks::Int)
-    w = similar(v)
-    foreach_range(length(v), ntasks) do r
-        @inbounds for i in r
-            w[i] = v[p[i]]
+function permute_by!(v::AbstractVector{T}, p::Vector{Int}, ntasks::Int) where {T}
+    w, h = scratch_vector(T, length(v))
+    try
+        foreach_range(length(v), ntasks) do r
+            @inbounds for i in r
+                w[i] = v[p[i]]
+            end
         end
-    end
-    foreach_range(length(v), ntasks) do r
-        @inbounds for i in r
-            v[i] = w[i]
+        foreach_range(length(v), ntasks) do r
+            @inbounds for i in r
+                v[i] = w[i]
+            end
         end
+        return v
+    finally
+        free_scratch(h)
     end
-    return v
 end
 
 """
@@ -359,9 +367,17 @@ function simdsortperm(v::Vector{T}; rev::Bool=false,
         r = symbol_ranks(v, Int(ntasks))
         r === nothing || return simdsortperm(r[1]; rev, ntasks)
     end
-    GC.@preserve v begin
-        ks = ByteKeys(v, rev, Int(ntasks))
-        return refine!(ks, collect(1:length(v)), 0, Int(ntasks), prefix_cache(ks, Int(ntasks)))
+    n = length(v)
+    ptr, h1 = scratch_vector(Ptr{UInt8}, n)
+    len, h2 = scratch_vector(Int, n)
+    pc, h3 = scratch_vector(UInt128, n)
+    try
+        GC.@preserve v begin
+            ks = ByteKeys(v, rev, Int(ntasks), ptr, len)
+            return refine!(ks, collect(1:n), 0, Int(ntasks), prefix_cache(ks, Int(ntasks), pc))
+        end
+    finally
+        free_scratch(h1); free_scratch(h2); free_scratch(h3)
     end
 end
 

@@ -30,6 +30,7 @@ using SIMD
 export simdsort!, simdsort, simdsortperm
 
 include("instrument.jl")
+include("scratchmem.jl")
 include("keys.jl")
 include("network.jl")
 include("partition.jl")

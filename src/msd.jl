@@ -77,80 +77,103 @@ function sort_by_words!(v::Vector{T}, f::F, rev::Bool, ntasks::Int) where {T,F}
     chunks = collect(Iterators.partition(1:n, cld(n, max(1, ntasks))))
     nc = length(chunks)
     counts = zeros(Int, nb, nc)
-    bk = Vector{UInt8}(undef, n)
-    tc = INSTR[] ? time_ns() : 0
-    foreach_chunk_index(nc) do c
-        cnt = zeros(Int, nb)
-        @inbounds for i in chunks[c]
-            d = bucket_of(spl, f(v[i])[1])
-            d = rev ? nb - 1 - d : d
-            bk[i] = d % UInt8
-            cnt[d+1] += 1
-        end
-        @inbounds counts[:, c] .= cnt
-    end
-    # Bucket-major prefix sums: chunk c writes bucket b from start[b, c].
-    start = similar(counts)
-    bstart = Vector{Int}(undef, nb + 1)
-    s = 1
-    for b in 1:nb
-        bstart[b] = s
-        for c in 1:nc
-            start[b, c] = s
-            s += counts[b, c]
-        end
-    end
-    bstart[nb+1] = s
-    INSTR[] && record_phase!(:msd_count, time_ns() - tc)
-    if INSTR[]
-        sizes = [bstart[b+1] - bstart[b] for b in 1:nb]
-        count!(:msd_buckets_nonempty, count(>(0), sizes))
-        countmax!(:msd_bucket_max, maximum(sizes))
-    end
-    ts = INSTR[] ? time_ns() : 0
-    tv = similar(v)
-    foreach_chunk_index(nc) do c
-        pos = start[:, c]
-        @inbounds for i in chunks[c]
-            d = bk[i] + 1
-            tv[pos[d]] = v[i]
-            pos[d] += 1
-        end
-    end
-    INSTR[] && record_phase!(:msd_scatter, time_ns() - ts)
-    tf = INSTR[] ? time_ns() : 0
-    # Sort every bucket from the scratch array back into v, in cache, with
-    # scratch buffers reused across the buckets of a task (fresh buffers of this
-    # size are malloc'ed and page-faulted each time).
-    bmax = maximum(b -> bstart[b+1] - bstart[b], 1:nb)
-    if ntasks <= 1
-        finish_buckets!(v, tv, bstart, 1:nb, f, rev, bmax)
-    else
-        # Groups of buckets of about equal size, several per task, at most
-        # ntasks running at a time.
-        target = cld(n, 8ntasks)
-        sem = Base.Semaphore(ntasks)
-        tasks = Task[]
-        b = 1
-        while b <= nb
-            g, sz = b, 0
-            while g <= nb && (sz == 0 || sz + bstart[g+1] - bstart[g] <= target)
-                sz += bstart[g+1] - bstart[g]
-                g += 1
+    bk, hb = scratch_vector(UInt8, n)
+    tv, ht = scratch_vector(T, n)
+    try
+        tc = INSTR[] ? time_ns() : 0
+        foreach_chunk_index(nc) do c
+            cnt = zeros(Int, nb)
+            @inbounds for i in chunks[c]
+                d = bucket_of(spl, f(v[i])[1])
+                d = rev ? nb - 1 - d : d
+                bk[i] = d % UInt8
+                cnt[d+1] += 1
             end
-            bs = b:g-1
-            push!(tasks, spawn_limited(() -> finish_buckets!(v, tv, bstart, bs, f, rev, bmax), sem))
-            b = g
+            @inbounds counts[:, c] .= cnt
         end
-        foreach(wait, tasks)
+        # Bucket-major prefix sums: chunk c writes bucket b from start[b, c].
+        start = similar(counts)
+        bstart = Vector{Int}(undef, nb + 1)
+        s = 1
+        for b in 1:nb
+            bstart[b] = s
+            for c in 1:nc
+                start[b, c] = s
+                s += counts[b, c]
+            end
+        end
+        bstart[nb+1] = s
+        INSTR[] && record_phase!(:msd_count, time_ns() - tc)
+        if INSTR[]
+            sizes = [bstart[b+1] - bstart[b] for b in 1:nb]
+            count!(:msd_buckets_nonempty, count(>(0), sizes))
+            countmax!(:msd_bucket_max, maximum(sizes))
+        end
+        ts = INSTR[] ? time_ns() : 0
+        foreach_chunk_index(nc) do c
+            pos = start[:, c]
+            @inbounds for i in chunks[c]
+                d = bk[i] + 1
+                tv[pos[d]] = v[i]
+                pos[d] += 1
+            end
+        end
+        INSTR[] && record_phase!(:msd_scatter, time_ns() - ts)
+        tf = INSTR[] ? time_ns() : 0
+        # Sort every bucket from the scratch array back into v, in cache, with
+        # scratch buffers reused across the buckets of a task (fresh buffers of this
+        # size are malloc'ed and page-faulted each time).
+        bmax = maximum(b -> bstart[b+1] - bstart[b], 1:nb)
+        if ntasks <= 1
+            finish_buckets!(v, tv, bstart, 1:nb, f, rev, bmax)
+        else
+            # Groups of buckets of about equal size, several per task, at most
+            # ntasks running at a time.
+            target = cld(n, 8ntasks)
+            sem = Base.Semaphore(ntasks)
+            # One pair of scratch buffers per running task (at most ntasks), shared
+            # by the groups: a pair per group allocated ~64 MB at 8 tasks.
+            pool = Channel{Tuple{Vector{UInt64},Vector{Int}}}(ntasks)
+            for _ in 1:ntasks
+                put!(pool, (Vector{UInt64}(undef, bmax), Vector{Int}(undef, bmax)))
+            end
+            tasks = Task[]
+            b = 1
+            while b <= nb
+                g, sz = b, 0
+                while g <= nb && (sz == 0 || sz + bstart[g+1] - bstart[g] <= target)
+                    sz += bstart[g+1] - bstart[g]
+                    g += 1
+                end
+                bs = b:g-1
+                push!(tasks, spawn_limited(() -> finish_buckets!(v, tv, bstart, bs, f, rev, pool), sem))
+                b = g
+            end
+            foreach(wait, tasks)
+        end
+        INSTR[] && record_phase!(:msd_finish, time_ns() - tf)
+        return v
+    finally
+        free_scratch(hb); free_scratch(ht)
     end
-    INSTR[] && record_phase!(:msd_finish, time_ns() - tf)
-    return v
 end
 
 # Finish buckets bs with one set of scratch buffers.
 function finish_buckets!(v, tv, bstart, bs, f::F, rev::Bool, bmax::Int) where {F}
-    keys, idx = Vector{UInt64}(undef, bmax), Vector{Int}(undef, bmax)
+    finish_buckets!(v, tv, bstart, bs, f, rev, Vector{UInt64}(undef, bmax), Vector{Int}(undef, bmax))
+end
+
+# With buffers from a pool of the running tasks.
+function finish_buckets!(v, tv, bstart, bs, f::F, rev::Bool, pool::Channel) where {F}
+    keys, idx = take!(pool)
+    try
+        finish_buckets!(v, tv, bstart, bs, f, rev, keys, idx)
+    finally
+        put!(pool, (keys, idx))
+    end
+end
+
+function finish_buckets!(v, tv, bstart, bs, f::F, rev::Bool, keys::Vector{UInt64}, idx::Vector{Int}) where {F}
     for b in bs
         finish_bucket!(v, tv, bstart[b], bstart[b+1] - 1, f, rev, keys, idx)
     end
@@ -276,48 +299,52 @@ function distribute_sort!(p::Ptr{S}, n::Int, ntasks::Int) where {S}
     chunks = collect(Iterators.partition(1:n, cld(n, ntasks)))
     nc = length(chunks)
     counts = zeros(Int, nb, nc)
-    bk = Vector{UInt16}(undef, n)
-    tc = INSTR[] ? time_ns() : 0
-    foreach_chunk_index(nc) do c
-        dist_count!(counts, bk, k, spl, chunks[c], c, Val(nb))
-    end
-    start = similar(counts)
-    bstart = Vector{Int}(undef, nb + 1)
-    s = 1
-    for b in 1:nb
-        bstart[b] = s
-        for c in 1:nc
-            start[b, c] = s
-            s += counts[b, c]
+    bk, hb = scratch_vector(UInt16, n)
+    tv, ht = scratch_vector(S, n)
+    try
+        tc = INSTR[] ? time_ns() : 0
+        foreach_chunk_index(nc) do c
+            dist_count!(counts, bk, k, spl, chunks[c], c, Val(nb))
         end
-    end
-    bstart[nb+1] = s
-    INSTR[] && record_phase!(:dist_count, time_ns() - tc)
-    INSTR[] && countmax!(:dist_bucket_max, maximum(b -> bstart[b+1] - bstart[b], 1:nb))
-    ts = INSTR[] ? time_ns() : 0
-    tv = Vector{S}(undef, n)
-    foreach_chunk_index(nc) do c
-        dist_scatter!(tv, k, bk, start, chunks[c], c, nb)
-    end
-    INSTR[] && record_phase!(:dist_scatter, time_ns() - ts)
-    tf = INSTR[] ? time_ns() : 0
-    target = cld(n, 8ntasks)
-    sem = Base.Semaphore(ntasks)
-    tasks = Task[]
-    b = 1
-    while b <= nb
-        g, sz = b, 0
-        while g <= nb && (sz == 0 || sz + bstart[g+1] - bstart[g] <= target)
-            sz += bstart[g+1] - bstart[g]
-            g += 1
+        start = similar(counts)
+        bstart = Vector{Int}(undef, nb + 1)
+        s = 1
+        for b in 1:nb
+            bstart[b] = s
+            for c in 1:nc
+                start[b, c] = s
+                s += counts[b, c]
+            end
         end
-        bs = b:g-1
-        push!(tasks, spawn_limited(() -> dist_finish!(k, tv, bstart, bs), sem))
-        b = g
+        bstart[nb+1] = s
+        INSTR[] && record_phase!(:dist_count, time_ns() - tc)
+        INSTR[] && countmax!(:dist_bucket_max, maximum(b -> bstart[b+1] - bstart[b], 1:nb))
+        ts = INSTR[] ? time_ns() : 0
+        foreach_chunk_index(nc) do c
+            dist_scatter!(tv, k, bk, start, chunks[c], c, nb)
+        end
+        INSTR[] && record_phase!(:dist_scatter, time_ns() - ts)
+        tf = INSTR[] ? time_ns() : 0
+        target = cld(n, 8ntasks)
+        sem = Base.Semaphore(ntasks)
+        tasks = Task[]
+        b = 1
+        while b <= nb
+            g, sz = b, 0
+            while g <= nb && (sz == 0 || sz + bstart[g+1] - bstart[g] <= target)
+                sz += bstart[g+1] - bstart[g]
+                g += 1
+            end
+            bs = b:g-1
+            push!(tasks, spawn_limited(() -> dist_finish!(k, tv, bstart, bs), sem))
+            b = g
+        end
+        foreach(wait, tasks)
+        INSTR[] && record_phase!(:dist_finish, time_ns() - tf)
+        return true
+    finally
+        free_scratch(hb); free_scratch(ht)
     end
-    foreach(wait, tasks)
-    INSTR[] && record_phase!(:dist_finish, time_ns() - tf)
-    return true
 end
 
 function dist_count!(counts, bk, k::Vector{S}, spl::Vector{S}, r, c, vnb::Val{nb}) where {S,nb}
