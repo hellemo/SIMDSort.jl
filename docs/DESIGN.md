@@ -743,3 +743,95 @@ How it is kept cheap and correct:
 
 The overhead is now under 10% of the wall time, and at one thread the phase
 times add up to the wall time. Phase times are task times summed over threads.
+
+## 10. Code structure and the remaining unsafe code
+
+**Files.** `SIMDSort.jl` (public entry points, `sort_primitive!` per key
+class), `keys.jl` (orderings, key maps, `as_keys`), `keyref.jl` (key
+references), `partition.jl`, `network.jl`, `sort.jl` (quicksort, pivots,
+counting sort), `parallel.jl` (parallel quicksort and partition), `tasks.jl`
+(task helpers), `scratchmem.jl` (`ScratchArena`), `instrument.jl`, `perm.jl`
+(key sources and the windowed sort), `hashcount.jl`, `msd.jl` (distribution
+passes), `wide.jl`, `compound.jl`, and the extensions.
+
+**Types for control flow.**
+- The sort direction is Base's `Forward`/`Reverse` ordering, converted once
+  from `rev` at the public functions.
+- The three primitive key classes (`MappedKeys`, `NativeKeys`, `FloatKeys`)
+  select a `sort_primitive!` method, each with its own measured order of checks.
+- The CPU target is a trait (`target()`).
+- Leaf keys enter the networks through a transform (`PlainKeys`,
+  `OffsetKeys`).
+- Distribution passes classify through functors (`WordBucket`, `KeyBucket`)
+  and build a `Distribution`.
+- Key sources share one documented interface (`keybits`, `keywidth` or
+  `exhausted`, `length_tiebreak`, `finish_ties!`), with byte keys behind
+  `AbstractByteKeys`.
+- Extensions only define `orderwords`/`has_orderwords`.
+
+**Shared helpers.**
+- Task helpers: `tforeach`, `tforeach_index`, `tmapreduce`,
+  `balanced_groups` with `run_limited`, and `tworkers` (workers with their own
+  scratch state).
+- One partition main loop for the two- and three-way kernels.
+- One sample-and-scatter path for both distribution passes.
+- `@phase` for every timed region.
+
+**Safe or raw memory access in the kernels.** The kernels are written against
+key references (`keyref.jl`): `vld`/`vst`, `ld`/`st!`, `shift`, `copykeys!`,
+`prefetch`. There are two backings, `ArrRange` (a `Vector` plus offset, read
+with SIMD.jl's array `vload`/`vstore` under `@inbounds`) and `Ptr`. With
+identical kernel code, interleaved A/B on the AVX2 laptop:
+
+| | arrays (`SAFE_KEYS = true`) | pointers |
+|---|---:|---:|
+| partition kernel, 2^14 keys (in cache) | 1.22–1.25× | 1 |
+| partition kernel, 2^22 keys | 1.08–1.12× | 1 |
+| small sorts (24–128 keys) | 1.00–1.06× | 1 |
+| small sort, 256 Int32 keys | 1.18× | 1 |
+| full sort, 2^24 keys, 1 thread | 1.17–1.19× | 1.00 |
+| full sort, 2^24 keys, 8 threads | 1.07–1.10× | 1.00 |
+
+With arrays, every vector load and store recomputes the array's data address:
+SIMD.jl's `llvmcall` stores carry no alias information, so LLVM cannot keep the
+address in a register across them. `copyto!` also keeps its bounds checks. The
+partition kernel has 579 instructions against 350. So `SAFE_KEYS = false`: the
+kernels use pointers, and everything around them works on arrays and views.
+`sort_auto!` takes the key vector, or the NaN-free view of a float vector.
+Pointers are made only in `sort_auto!`/`sort_keys!` and for the scratch
+buffers (`scratchref` follows the kind of the keys), each under one
+`GC.@preserve`. The switch stays for re-measuring, e.g. if SIMD.jl gains
+alias-annotated stores.
+
+**What remains unsafe, and why.**
+- `keyref.jl`: the pointer backing of the kernel primitives (above).
+- `scratchmem.jl`: `ScratchArena` takes buffers of 1 MB or more from
+  `malloc`, which the GC does not count. Large temporaries had triggered full
+  collections that mark every live object: 0.4 s of a 0.7 s `sortperm` of 10^7
+  strings, and slower than one thread on 56 threads.
+- `keys.jl`: `as_keys` views a vector of bits values as integer keys of the
+  same size (floats, Dates), in one place.
+- `perm.jl`: byte keys read string bytes in place, with one big-endian 8-byte
+  load per window.
+- `wide.jl`: BigInt/BigFloat limbs through GMP's documented `mpz_export`.
+
+Removed in the refactoring:
+- the array of raw string pointers;
+- the bignum pointer array;
+- `unsafe_load` of GMP internals;
+- `unsafe_store!` of encoded words;
+- the `unsafe_wrap` of float subranges and in the Dates extension;
+- pointer arithmetic in all kernels.
+
+Not consolidated: `qsort!` and `pqsort!` remain separate. They differ in the
+partition (serial, or parallel with a special case for duplicates), in
+tracking the leaf bounds, and in spawning tasks, so a shared step function
+would add hooks to the hottest loop for little gain.
+
+**The regression gate.** Every refactoring step was checked with
+`bench/ab.jl`: the previous source tree and the working tree as module copies
+in one process, interleaved, fresh inputs, at 1 and 8 threads, including
+forced sample-sort cases. A case counts as slower only if its median and best
+are both worse by more than 2% and it stays so when rerun alone (`AB_ONLY`).
+Each step also passed the tests on Julia 1.13, 1.10 and with generic SIMD
+lowering.

@@ -89,6 +89,17 @@ implementation deviates from the papers.
   - with `ntasks > 1`, large ranges are partitioned in parallel and the smaller
     side of each partition becomes a new task.
 
+### Code structure
+
+The kernels are written against key references with a safe (array) and a
+raw (pointer) backing. Measured with the same code, the safe one costs
+17–19% on one thread (the partition loop reloads the array's data address
+around every SIMD.jl store), so the kernels use pointers. Everything around
+them works on arrays and views, and the remaining unsafe code is in a few
+documented places. docs/DESIGN.md §10 has the measurements.
+`bench/ab.jl` compares a baseline source tree against the working tree, run
+interleaved in one process; every refactoring step had to pass it.
+
 ## Results
 
 Measured on an Intel Core Ultra 7 268V (Lunar Lake: 4 P + 4 E cores, AVX2,
