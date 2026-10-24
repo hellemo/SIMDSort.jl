@@ -198,16 +198,10 @@ function refine!(ks::KeySource, perm::AbstractVector{Int}, off::Int, ntasks::Int
     ho = C_NULL
     try
         while true
-            woff = off                  # a fresh binding per iteration for the closure
-            foreach_range(m, ntasks) do r
-                @inbounds for j in r
-                    keys[j] = (window(ks, pc, perm, j, woff, K) << ib) | UInt64(j - 1)
-                end
-            end
-            # Skip bits that all keys of the run share (long common prefixes, as in
-            # "id%010d"): a window with no differences needs no sort.
-            k1 = keys[1] >> ib
-            d = mapreduce(x -> (x >> ib) ⊻ k1, |, keys)
+            # The windows, and the bits in which any of them differs from the
+            # first. Skip bits that all keys of the run share (long common
+            # prefixes, as in "id%010d"): a window with no differences needs no sort.
+            d = @phase :window_build window_keys!(keys, ks, pc, perm, off, K, ib, ntasks)
             if d == 0
                 off += K
                 all_exhausted(ks, perm, off) && return finish_ties!(ks, perm)
@@ -223,24 +217,20 @@ function refine!(ks::KeySource, perm::AbstractVector{Int}, off::Int, ntasks::Int
         end
         simdsort!(keys; ntasks)
         old, ho = scratch_vector(Int, m)
-        copyto!(old, perm)
+        tg = INSTR[] ? time_ns() : 0
+        foreach_range(m, ntasks) do r
+            @inbounds for j in r
+                old[j] = perm[j]
+            end
+        end
         foreach_range(m, ntasks) do r
             @inbounds for j in r
                 perm[j] = old[(keys[j] & mask) % Int + 1]
             end
         end
+        INSTR[] && record_phase!(:window_gather, time_ns() - tg)
         # Refine the runs with equal windows.
-        runs = UnitRange{Int}[]
-        j = 1
-        @inbounds while j <= m
-            h = keys[j] >> ib
-            k = j
-            while k < m && keys[k+1] >> ib == h
-                k += 1
-            end
-            k > j && push!(runs, j:k)
-            j = k + 1
-        end
+        runs = @phase :window_runs equal_runs(keys, ib, ntasks)
         isempty(runs) && return perm
         next = off + K
         # Each run gets its own slice of the prefix cache, gathered in its new order.
@@ -277,6 +267,65 @@ function refine!(ks::KeySource, perm::AbstractVector{Int}, off::Int, ntasks::Int
     finally
         free_scratch(hk); free_scratch(ho)
     end
+end
+
+# collect(1:n), written in parallel (a single server core writes ~13 GB/s).
+function identity_perm(n::Int, ntasks::Int)
+    p = Vector{Int}(undef, n)
+    foreach_range(n, ntasks) do r
+        @inbounds for i in r
+            p[i] = i
+        end
+    end
+    return p
+end
+
+# keys[j] = window j (bits [off, off + K) of key perm[j]) << ib | (j - 1), in
+# parallel chunks; returns the OR over all j of window j ⊻ window 1.
+function window_keys!(keys, ks, pc, perm, off::Int, K::Int, ib::Int, ntasks::Int)
+    m = length(keys)
+    k1 = window(ks, pc, perm, 1, off, K)
+    nc = (ntasks <= 1 || m < PERM_PAR_MIN) ? 1 : ntasks
+    chunks = collect(Iterators.partition(1:m, cld(m, nc)))
+    ds = zeros(UInt64, length(chunks))
+    foreach_chunk_index(length(chunks)) do c
+        d = zero(UInt64)
+        @inbounds for j in chunks[c]
+            w = window(ks, pc, perm, j, off, K)
+            keys[j] = (w << ib) | UInt64(j - 1)
+            d |= w ⊻ k1
+        end
+        ds[c] = d
+    end
+    return reduce(|, ds)
+end
+
+# The runs (length ≥ 2) of equal windows keys[j] >> ib, in order. In
+# parallel: each chunk reports the runs that start in it, following a run past
+# its end.
+function equal_runs(keys, ib::Int, ntasks::Int)
+    m = length(keys)
+    nc = (ntasks <= 1 || m < PERM_PAR_MIN) ? 1 : ntasks
+    chunks = collect(Iterators.partition(1:m, cld(m, nc)))
+    parts = [UnitRange{Int}[] for _ in chunks]
+    foreach_chunk_index(length(chunks)) do c
+        out = parts[c]
+        j = first(chunks[c])
+        @inbounds while j <= last(chunks[c])
+            h = keys[j] >> ib
+            if j > 1 && keys[j-1] >> ib == h     # continues a run that started before
+                j += 1
+                continue
+            end
+            k = j
+            while k < m && keys[k+1] >> ib == h
+                k += 1
+            end
+            k > j && push!(out, j:k)
+            j = k + 1
+        end
+    end
+    return reduce(vcat, parts)
 end
 
 # Stable insertion sort of a small run with a full comparison from bit `off`. With
@@ -357,7 +406,7 @@ simdsortperm(v::AbstractVector; rev::Bool=false, ntasks::Integer=1) = sortperm(v
 
 function simdsortperm(v::Vector{T}; rev::Bool=false, ntasks::Integer=1) where {T<:SortTypes}
     length(v) <= 1 && return collect(1:length(v))
-    return refine!(NumKeys(v, rev), collect(1:length(v)), 0, Int(ntasks))
+    return refine!(NumKeys(v, rev), identity_perm(length(v), Int(ntasks)), 0, Int(ntasks))
 end
 
 function simdsortperm(v::Vector{T}; rev::Bool=false,
@@ -374,7 +423,7 @@ function simdsortperm(v::Vector{T}; rev::Bool=false,
     try
         GC.@preserve v begin
             ks = ByteKeys(v, rev, Int(ntasks), ptr, len)
-            return refine!(ks, collect(1:n), 0, Int(ntasks), prefix_cache(ks, Int(ntasks), pc))
+            return refine!(ks, identity_perm(n, Int(ntasks)), 0, Int(ntasks), prefix_cache(ks, Int(ntasks), pc))
         end
     finally
         free_scratch(h1); free_scratch(h2); free_scratch(h3)
@@ -392,6 +441,59 @@ function symbol_ranks(v::Vector{Symbol}, ntasks::Int)
     n = length(v)
     n < 1024 && return nothing
     limit = n ÷ 4
+    nc = (ntasks <= 1 || n < PERM_PAR_MIN) ? 1 : ntasks
+    nc == 1 && return symbol_ranks_serial(v, limit)
+    # The distinct symbols: a set per chunk, merged pairwise in parallel (the
+    # serial dictionary pass took 0.23 s for 10^7 symbols at any thread count).
+    t0 = INSTR[] ? time_ns() : 0
+    chunks = collect(Iterators.partition(1:n, cld(n, nc)))
+    sets = [Set{Symbol}() for _ in chunks]
+    over = Threads.Atomic{Bool}(false)
+    foreach_chunk_index(length(chunks)) do c
+        st = sets[c]
+        @inbounds for i in chunks[c]
+            push!(st, v[i])
+            if length(st) > limit
+                over[] = true
+                return
+            end
+        end
+    end
+    over[] && return nothing
+    INSTR[] && record_phase!(:symbol_sets, time_ns() - t0)
+    t0 = INSTR[] ? time_ns() : 0
+    while length(sets) > 1
+        half = cld(length(sets), 2)
+        foreach_chunk_index(length(sets) - half) do c
+            union!(sets[c], sets[c+half])
+        end
+        resize!(sets, half)
+        length(sets[1]) > limit && return nothing
+    end
+    uniq = collect(sets[1])
+    length(uniq) > limit && return nothing
+    INSTR[] && record_phase!(:symbol_merge, time_ns() - t0)
+    order = GC.@preserve uniq begin
+        ks = ByteKeys(uniq, false, 1)
+        refine!(ks, collect(1:length(uniq)), 0, 1, prefix_cache(ks, 1))
+    end
+    sorted = uniq[order]
+    rank = Dict{Symbol,Int32}(s => Int32(r) for (r, s) in enumerate(sorted))
+    # Concurrent reads of the finished dictionary.
+    codes = Vector{Int32}(undef, n)
+    t0 = INSTR[] ? time_ns() : 0
+    foreach_range(n, ntasks) do rg
+        @inbounds for i in rg
+            codes[i] = rank[v[i]]
+        end
+    end
+    INSTR[] && record_phase!(:symbol_lookup, time_ns() - t0)
+    return codes, sorted
+end
+
+# One dictionary pass that assigns codes in order of first appearance.
+function symbol_ranks_serial(v::Vector{Symbol}, limit::Int)
+    n = length(v)
     code = Dict{Symbol,Int32}()
     codes = Vector{Int32}(undef, n)
     @inbounds for i in 1:n
@@ -411,10 +513,8 @@ function symbol_ranks(v::Vector{Symbol}, ntasks::Int)
     for (r, c) in enumerate(order)
         rank[c] = Int32(r)
     end
-    foreach_range(n, ntasks) do rg
-        @inbounds for i in rg
-            codes[i] = rank[codes[i]]
-        end
+    @inbounds for i in 1:n
+        codes[i] = rank[codes[i]]
     end
     return codes, uniq[order]
 end

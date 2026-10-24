@@ -328,19 +328,22 @@ end
     end
 
     @testset "distribution top level (64-bit keys)" begin
-        old = SIMDSort.DIST_MINN[]
+        old = (SIMDSort.DIST_MINN[], SIMDSort.DIST_MINTASKS[])
         SIMDSort.DIST_MINN[] = 1
+        SIMDSort.DIST_MINTASKS[] = 1
         try
             n = 2 * 10^5 + 3
+            fl = randn(rng, n); fl[1:7:end] .= 0.0; fl[2:7:end] .= -0.0; fl[3:101:end] .= NaN; fl[4:997:end] .= Inf
             for v in Any[rand(rng, Int64, n), rand(rng, UInt64, n), rand(rng, Int64(-50):Int64(50), n) .* 10^15,
-                         round.(Int64, randn(rng, n) .* 1e9), [rand(rng, Bool) ? typemin(Int64) : rand(rng, Int64) for _ in 1:n]],
+                         round.(Int64, randn(rng, n) .* 1e9), [rand(rng, Bool) ? typemin(Int64) : rand(rng, Int64) for _ in 1:n],
+                         rand(rng, Int32, n), rand(rng, UInt32, n), fl, Float32.(fl), randn(rng, Float32, n)],
                 rev in (false, true), nt in (8, 13)
-                @test simdsort(v; rev, ntasks = nt) == sort(v; rev)
+                @test isequal(simdsort(v; rev, ntasks = nt), sort(v; rev))
             end
             r = SIMDSort.instrumented(() -> simdsort!(rand(rng, UInt64, n); ntasks = 8))
             @test get(r.counters, :dist_sorts, 0) == 1
         finally
-            SIMDSort.DIST_MINN[] = old
+            SIMDSort.DIST_MINN[], SIMDSort.DIST_MINTASKS[] = old
         end
     end
 

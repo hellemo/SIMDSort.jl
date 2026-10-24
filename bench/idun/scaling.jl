@@ -27,14 +27,18 @@ function xss!(v::Vector{T}, nt) where {T}
     return v
 end
 
-function dist!(v, nt)
-    Q.DIST_MINN[] = 1 << 20; Q.DIST_MINTASKS[] = 1
+# SIMDSort with the sample-sort top level forced on, and forced off.
+function with_dist(f, on::Bool)
+    old = (Q.DIST_MINN[], Q.DIST_MINTASKS[])
+    Q.DIST_MINN[], Q.DIST_MINTASKS[] = on ? (1 << 20, 1) : (typemax(Int), typemax(Int))
     try
-        simdsort!(v; ntasks = nt)
+        f()
     finally
-        Q.DIST_MINN[] = typemax(Int); Q.DIST_MINTASKS[] = 8
+        Q.DIST_MINN[], Q.DIST_MINTASKS[] = old
     end
 end
+dist!(v, nt) = with_dist(() -> simdsort!(v; ntasks = nt), true)
+qs!(v, nt) = with_dist(() -> simdsort!(v; ntasks = nt), false)
 
 rng = Xoshiro(11)
 randstr(n) = String(rand(rng, UInt8[0x30:0x39; 0x41:0x5a; 0x61:0x7a], n))
@@ -60,7 +64,10 @@ function methods_for(x, op, nt)
         return ms
     end
     push!(ms, "SIMDSort" => v -> simdsort!(v; ntasks = nt), "ChapelSort" => v -> psort!(v; ntasks = nt))
-    T in (Int64, UInt64) && push!(ms, "SIMDSort dist" => v -> dist!(v, nt))
+    # "SIMDSort" is the default (sample-sort top level from DIST_MINTASKS tasks);
+    # the two forced variants show the crossover.
+    T <: Union{Int32,UInt32,Float32,Int64,UInt64,Float64} &&
+        push!(ms, "SIMDSort dist" => v -> dist!(v, nt), "SIMDSort quicksort" => v -> qs!(v, nt))
     LIB !== nothing && T in (UInt64, Int64, Float64, UInt32, Int32, Float32) && push!(ms, "x86-simd-sort" => v -> xss!(v, nt))
     return ms
 end

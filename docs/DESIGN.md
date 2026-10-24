@@ -563,7 +563,7 @@ interleaved, with fresh inputs:
 Final: `Float64` 0.542 s, against x86-simd-sort's 0.579 s; SIMDSort is the
 fastest one-thread sort for every numeric type measured (README).
 
-### j. A sample-sort top level for 64-bit keys at 8 threads (disabled)
+### j. A sample-sort top level for many threads (on from 16 tasks)
 
 At 8 threads ChapelSort's radix sort beat the quicksort on random `UInt64`
 (2^27 keys: 0.33 s against 0.43 s, §7.h). The idea was to replace the
@@ -598,9 +598,23 @@ Two lessons for the code:
 - `foreach_range` runs serially below `PERM_PAR_MIN` elements, so it must not
   be used to spread a handful of chunks over tasks (`foreach_chunk_index`).
 
-The step stays in the code but is off (`DIST_MINN = typemax(Int)`). The Idun
-run (`bench/idun/scaling.jl`) measures it at up to all cores of a many-core
-node, where the memory-bound top levels weigh more.
+**On a many-core node it wins.** On Idun (2 × 28-core Xeon Gold 6348, Ice
+Lake-SP), with `ntasks` correctly bounding the number of running tasks (it did
+not before: `ntasks` only set the task grain), the parallel quicksort stops
+scaling at about 16 threads, while the distribution step keeps going:
+
+| seconds | 8 thr | 16 thr | 32 thr | 56 thr |
+|---|---:|---:|---:|---:|
+| `UInt64` 2^27, quicksort | 0.360 | 0.292 | 0.289 | 0.290 |
+| `UInt64` 2^27, distribution | 0.475 | 0.276 | 0.175 | 0.147 |
+| `Int64` 2^26, quicksort | 0.156 | 0.118 | 0.118 | 0.110 |
+| `Int64` 2^26, distribution | 0.213 | 0.115 | 0.074 | 0.059 |
+| ChapelSort `Int64` 2^26 | 0.275 | 0.153 | 0.103 | 0.078 |
+
+So `sort_auto!` uses it from `DIST_MINTASKS = 16` tasks and `DIST_MINN = 2^22`
+keys, for all six primitive key types. Floats and 32-bit keys were not
+measured with it yet; the next Idun run (`bench/idun/scaling.jl`, methods
+"SIMDSort dist" and "SIMDSort quicksort") gives their crossover.
 
 ## 8. Other key types: windowed keys
 

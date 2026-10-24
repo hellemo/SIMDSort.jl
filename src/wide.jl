@@ -35,7 +35,7 @@ iswideint(::Type{T}) where {T} =
 function simdsortperm(v::Vector{T}; rev::Bool=false, ntasks::Integer=1) where {T<:Union{Signed,Unsigned}}
     iswideint(T) || return sortperm(v; rev)
     length(v) <= 1 && return collect(1:length(v))
-    return refine!(WideIntKeys(v, rev), collect(1:length(v)), 0, Int(ntasks))
+    return refine!(WideIntKeys(v, rev), identity_perm(length(v), Int(ntasks)), 0, Int(ntasks))
 end
 
 # Order words of a wide integer: its unsigned form (sign bit flipped if signed),

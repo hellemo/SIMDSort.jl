@@ -67,18 +67,19 @@ function main()
     row(case, nt, kind, name, value, calls) =
         println(csv, "\"", case, "\",", nt, ",", kind, ",", name, ",", value, ",", calls)
     jobs = [(c..., nt, c[1]) for c in CASES for nt in threads]
-    # The distribution top level (disabled by default) for 64-bit keys at NT.
-    push!(jobs, (CASES[1]..., NT, CASES[1][1] * " [dist]"), (CASES[2]..., NT, CASES[2][1] * " [dist]"))
+    # The sample-sort top level forced off at NT (it is on by default there).
+    push!(jobs, (CASES[1]..., NT, CASES[1][1] * " [quicksort]"), (CASES[2]..., NT, CASES[2][1] * " [quicksort]"),
+          (CASES[3]..., NT, CASES[3][1] * " [quicksort]"))
     for (name, gen, op, nt, label) in jobs
-        dist = endswith(label, "[dist]")
-        dist && (Q.DIST_MINN[] = 1 << 20)
+        old = (Q.DIST_MINN[], Q.DIST_MINTASKS[])
+        endswith(label, "[quicksort]") && (Q.DIST_MINN[] = typemax(Int))
         plain, r = try
             measure(name, gen, op, nt)
         catch err
             println(txt, "== $label, $nt threads: ERROR $err"); flush(txt)
             continue
         finally
-            Q.DIST_MINN[] = typemax(Int)
+            Q.DIST_MINN[], Q.DIST_MINTASKS[] = old
         end
         hdr = @sprintf("== %s, %d threads: wall %.4f s plain, %.4f s instrumented", label, nt, plain, r.wall)
         println(hdr); println(txt, hdr)
