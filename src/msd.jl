@@ -27,6 +27,26 @@ const MSD_MINN = 1 << 16          # below this, the plain permutation path
     return i
 end
 
+# Splitters from the leading order words of a sorted random sample, every
+# MSD_OVERSAMPLE-th [IPS4o] (radix digits put skewed keys such as random floats
+# into a handful of buckets): spl[j] for j in 1:nb-1, padded with typemax at
+# index nb, so that bucket(x) = #{j : spl[j] <= x}. `nothing` if the sample has
+# too few distinct leading words for balanced buckets.
+function word_splitters(f::F, v::AbstractVector, nb::Int) where {F}
+    n = length(v)
+    smp = Vector{UInt64}(undef, nb * MSD_OVERSAMPLE)
+    r = UInt64(n) | 1
+    @inbounds for j in eachindex(smp)
+        r = xorshift(r)
+        smp[j] = f(v[1+Int(r % UInt64(n))])[1]
+    end
+    sort!(smp)
+    count(i -> smp[i] != smp[i-1], 2:length(smp)) < nb ÷ 4 && return nothing
+    spl = [smp[j*MSD_OVERSAMPLE] for j in 1:nb-1]
+    push!(spl, typemax(UInt64))
+    return spl
+end
+
 """
     sort_by_words!(v, f, rev, ntasks)
 
@@ -40,93 +60,73 @@ function sort_by_words!(v::Vector{T}, f::F, rev::Bool, ntasks::Int) where {T,F}
     n = length(v)
     n < MSD_MINN && return permute_by!(v, wordkeys_sortperm(words_of(f, v, ntasks); rev, ntasks), ntasks)
     count!(:msd_sorts)
-    # Splitters: leading words of a sorted random sample, every MSD_OVERSAMPLE-th
-    # [IPS4o] (radix digits put skewed keys such as random floats into a
-    # handful of buckets).
     nb = MSD_BUCKETS
-    ts0 = INSTR[] ? time_ns() : 0
-    smp = Vector{UInt64}(undef, nb * MSD_OVERSAMPLE)
-    r = UInt64(n) | 1
-    @inbounds for j in eachindex(smp)
-        r = xorshift(r)
-        smp[j] = f(v[1+Int(r % UInt64(n))])[1]
-    end
-    sort!(smp)
-    # Few distinct leading words: the buckets would be unbalanced.
-    if smp[1] == smp[end] || count(i -> smp[i] != smp[i-1], 2:length(smp)) < nb ÷ 4
-        INSTR[] && record_phase!(:msd_sample, time_ns() - ts0)
+    spl = @phase :msd_sample word_splitters(f, v, nb)
+    if spl === nothing          # few distinct leading words: unbalanced buckets
         count!(:msd_skipped_fewlead)
         return permute_by!(v, wordkeys_sortperm(words_of(f, v, ntasks); rev, ntasks), ntasks)
     end
-    # spl[j] for j in 1:nb-1 (padded at index nb): bucket(x) = #{j : spl[j] <= x}.
-    spl = [smp[j*MSD_OVERSAMPLE] for j in 1:nb-1]
-    push!(spl, typemax(UInt64))
-    INSTR[] && record_phase!(:msd_sample, time_ns() - ts0)
     cs = chunks(n, ntasks)
     nc = length(cs)
     counts = zeros(Int, nb, nc)
     bk, hb = scratch_vector(UInt8, n)
     tv, ht = scratch_vector(T, n)
     try
-        tc = INSTR[] ? time_ns() : 0
-        tforeach_index(nc) do c
-            cnt = zeros(Int, nb)
-            @inbounds for i in cs[c]
-                d = bucket_of(spl, f(v[i])[1])
-                d = rev ? nb - 1 - d : d
-                bk[i] = d % UInt8
-                cnt[d+1] += 1
+        @phase :msd_count begin
+            tforeach_index(nc) do c
+                cnt = zeros(Int, nb)
+                @inbounds for i in cs[c]
+                    d = bucket_of(spl, f(v[i])[1])
+                    d = rev ? nb - 1 - d : d
+                    bk[i] = d % UInt8
+                    cnt[d+1] += 1
+                end
+                @inbounds counts[:, c] .= cnt
             end
-            @inbounds counts[:, c] .= cnt
-        end
-        # Bucket-major prefix sums: chunk c writes bucket b from start[b, c].
-        start = similar(counts)
-        bstart = Vector{Int}(undef, nb + 1)
-        s = 1
-        for b in 1:nb
-            bstart[b] = s
-            for c in 1:nc
-                start[b, c] = s
-                s += counts[b, c]
+            # Bucket-major prefix sums: chunk c writes bucket b from start[b, c].
+            start = similar(counts)
+            bstart = Vector{Int}(undef, nb + 1)
+            s = 1
+            for b in 1:nb
+                bstart[b] = s
+                for c in 1:nc
+                    start[b, c] = s
+                    s += counts[b, c]
+                end
             end
+            bstart[nb+1] = s
         end
-        bstart[nb+1] = s
-        INSTR[] && record_phase!(:msd_count, time_ns() - tc)
-        if INSTR[]
-            sizes = [bstart[b+1] - bstart[b] for b in 1:nb]
-            count!(:msd_buckets_nonempty, count(>(0), sizes))
-            countmax!(:msd_bucket_max, maximum(sizes))
-        end
-        ts = INSTR[] ? time_ns() : 0
-        tforeach_index(nc) do c
-            pos = start[:, c]
-            @inbounds for i in cs[c]
-                d = bk[i] + 1
-                tv[pos[d]] = v[i]
-                pos[d] += 1
+        count_buckets(:msd, bstart)
+        @phase :msd_scatter begin
+            tforeach_index(nc) do c
+                pos = start[:, c]
+                @inbounds for i in cs[c]
+                    d = bk[i] + 1
+                    tv[pos[d]] = v[i]
+                    pos[d] += 1
+                end
             end
         end
-        INSTR[] && record_phase!(:msd_scatter, time_ns() - ts)
-        tf = INSTR[] ? time_ns() : 0
-        # Sort every bucket from the scratch array back into v, in cache, with
-        # scratch buffers reused across the buckets of a task (fresh buffers of this
-        # size are malloc'ed and page-faulted each time).
-        bmax = maximum(b -> bstart[b+1] - bstart[b], 1:nb)
-        if ntasks <= 1
-            finish_buckets!(v, tv, bstart, 1:nb, f, rev, bmax)
-        else
-            # Groups of buckets of about equal size, several per task, at most
-            # ntasks running at a time.
-            # One pair of scratch buffers per running task (at most ntasks), shared
-            # by the groups: a pair per group allocated ~64 MB at 8 tasks.
-            pool = Channel{Tuple{Vector{UInt64},Vector{Int}}}(ntasks)
-            for _ in 1:ntasks
-                put!(pool, (Vector{UInt64}(undef, bmax), Vector{Int}(undef, bmax)))
+        @phase :msd_finish begin
+            # Sort every bucket from the scratch array back into v, in cache, with
+            # scratch buffers reused across the buckets of a task (fresh buffers of this
+            # size are malloc'ed and page-faulted each time).
+            bmax = maximum(b -> bstart[b+1] - bstart[b], 1:nb)
+            if ntasks <= 1
+                finish_buckets!(v, tv, bstart, 1:nb, f, rev, bmax)
+            else
+                # Groups of buckets of about equal size, several per task, at most
+                # ntasks running at a time.
+                # One pair of scratch buffers per running task (at most ntasks), shared
+                # by the groups: a pair per group allocated ~64 MB at 8 tasks.
+                pool = Channel{Tuple{Vector{UInt64},Vector{Int}}}(ntasks)
+                for _ in 1:ntasks
+                    put!(pool, (Vector{UInt64}(undef, bmax), Vector{Int}(undef, bmax)))
+                end
+                groups = balanced_groups(diff(bstart), cld(n, 8ntasks))
+                run_limited(bs -> finish_buckets!(v, tv, bstart, bs, f, rev, pool), groups, ntasks)
             end
-            groups = balanced_groups(diff(bstart), cld(n, 8ntasks))
-            run_limited(bs -> finish_buckets!(v, tv, bstart, bs, f, rev, pool), groups, ntasks)
         end
-        INSTR[] && record_phase!(:msd_finish, time_ns() - tf)
         return v
     finally
         free_scratch(hb); free_scratch(ht)
@@ -282,32 +282,32 @@ function distribute_sort!(p::Ptr{S}, n::Int, ntasks::Int) where {S}
     bk, hb = scratch_vector(UInt16, n)
     tv, ht = scratch_vector(S, n)
     try
-        tc = INSTR[] ? time_ns() : 0
-        tforeach_index(nc) do c
-            dist_count!(counts, bk, k, spl, cs[c], c, Val(nb))
+        @phase :dist_count begin
+            tforeach_index(nc) do c
+                dist_count!(counts, bk, k, spl, cs[c], c, Val(nb))
+            end
+            start = similar(counts)
+            bstart = Vector{Int}(undef, nb + 1)
+            s = 1
+            for b in 1:nb
+                bstart[b] = s
+                for c in 1:nc
+                    start[b, c] = s
+                    s += counts[b, c]
+                end
+            end
+            bstart[nb+1] = s
         end
-        start = similar(counts)
-        bstart = Vector{Int}(undef, nb + 1)
-        s = 1
-        for b in 1:nb
-            bstart[b] = s
-            for c in 1:nc
-                start[b, c] = s
-                s += counts[b, c]
+        count_buckets(:dist, bstart)
+        @phase :dist_scatter begin
+            tforeach_index(nc) do c
+                dist_scatter!(tv, k, bk, start, cs[c], c, nb)
             end
         end
-        bstart[nb+1] = s
-        INSTR[] && record_phase!(:dist_count, time_ns() - tc)
-        INSTR[] && countmax!(:dist_bucket_max, maximum(b -> bstart[b+1] - bstart[b], 1:nb))
-        ts = INSTR[] ? time_ns() : 0
-        tforeach_index(nc) do c
-            dist_scatter!(tv, k, bk, start, cs[c], c, nb)
+        @phase :dist_finish begin
+            groups = balanced_groups(diff(bstart), cld(n, 8ntasks))
+            run_limited(bs -> dist_finish!(k, tv, bstart, bs), groups, ntasks)
         end
-        INSTR[] && record_phase!(:dist_scatter, time_ns() - ts)
-        tf = INSTR[] ? time_ns() : 0
-        groups = balanced_groups(diff(bstart), cld(n, 8ntasks))
-        run_limited(bs -> dist_finish!(k, tv, bstart, bs), groups, ntasks)
-        INSTR[] && record_phase!(:dist_finish, time_ns() - tf)
         return true
     finally
         free_scratch(hb); free_scratch(ht)

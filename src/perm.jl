@@ -201,24 +201,22 @@ function refine!(ks::KeySource, perm::AbstractVector{Int}, off::Int, ntasks::Int
             c < 8 && break
             off += c
         end
-        if INSTR[]
-            count!(:window_sorts)
-            count!(:window_keys, m)
-        end
+        count!(:window_sorts)
+        count!(:window_keys, m)
         simdsort!(keys; ntasks)
         old, ho = scratch_vector(Int, m)
-        tg = INSTR[] ? time_ns() : 0
-        tforeach(m, ntasks) do r
-            @inbounds for j in r
-                old[j] = perm[j]
+        @phase :window_gather begin
+            tforeach(m, ntasks) do r
+                @inbounds for j in r
+                    old[j] = perm[j]
+                end
+            end
+            tforeach(m, ntasks) do r
+                @inbounds for j in r
+                    perm[j] = old[(keys[j] & mask) % Int + 1]
+                end
             end
         end
-        tforeach(m, ntasks) do r
-            @inbounds for j in r
-                perm[j] = old[(keys[j] & mask) % Int + 1]
-            end
-        end
-        INSTR[] && record_phase!(:window_gather, time_ns() - tg)
         # Refine the runs with equal windows.
         runs = @phase :window_runs equal_runs(keys, ib, ntasks)
         isempty(runs) && return perm
@@ -420,34 +418,34 @@ function symbol_ranks(v::Vector{Symbol}, ntasks::Int)
     nc == 1 && return symbol_ranks_serial(v, limit)
     # The distinct symbols: a set per chunk, merged pairwise in parallel (the
     # serial dictionary pass took 0.23 s for 10^7 symbols at any thread count).
-    t0 = INSTR[] ? time_ns() : 0
-    cs = chunks(n, nc)
-    sets = [Set{Symbol}() for _ in cs]
-    over = Threads.Atomic{Bool}(false)
-    tforeach_index(length(cs)) do c
-        st = sets[c]
-        @inbounds for i in cs[c]
-            push!(st, v[i])
-            if length(st) > limit
-                over[] = true
-                return
+    @phase :symbol_sets begin
+        cs = chunks(n, nc)
+        sets = [Set{Symbol}() for _ in cs]
+        over = Threads.Atomic{Bool}(false)
+        tforeach_index(length(cs)) do c
+            st = sets[c]
+            @inbounds for i in cs[c]
+                push!(st, v[i])
+                if length(st) > limit
+                    over[] = true
+                    return
+                end
             end
         end
     end
     over[] && return nothing
-    INSTR[] && record_phase!(:symbol_sets, time_ns() - t0)
-    t0 = INSTR[] ? time_ns() : 0
-    while length(sets) > 1
-        half = cld(length(sets), 2)
-        tforeach_index(length(sets) - half) do c
-            union!(sets[c], sets[c+half])
+    @phase :symbol_merge begin
+        while length(sets) > 1
+            half = cld(length(sets), 2)
+            tforeach_index(length(sets) - half) do c
+                union!(sets[c], sets[c+half])
+            end
+            resize!(sets, half)
+            length(sets[1]) > limit && return nothing
         end
-        resize!(sets, half)
-        length(sets[1]) > limit && return nothing
+        uniq = collect(sets[1])
     end
-    uniq = collect(sets[1])
     length(uniq) > limit && return nothing
-    INSTR[] && record_phase!(:symbol_merge, time_ns() - t0)
     order = GC.@preserve uniq begin
         ks = ByteKeys(uniq, false, 1)
         refine!(ks, collect(1:length(uniq)), 0, 1, prefix_cache(ks, 1))
@@ -456,13 +454,13 @@ function symbol_ranks(v::Vector{Symbol}, ntasks::Int)
     rank = Dict{Symbol,Int32}(s => Int32(r) for (r, s) in enumerate(sorted))
     # Concurrent reads of the finished dictionary.
     codes = Vector{Int32}(undef, n)
-    t0 = INSTR[] ? time_ns() : 0
-    tforeach(n, ntasks) do rg
-        @inbounds for i in rg
-            codes[i] = rank[v[i]]
+    @phase :symbol_lookup begin
+        tforeach(n, ntasks) do rg
+            @inbounds for i in rg
+                codes[i] = rank[v[i]]
+            end
         end
     end
-    INSTR[] && record_phase!(:symbol_lookup, time_ns() - t0)
     return codes, sorted
 end
 

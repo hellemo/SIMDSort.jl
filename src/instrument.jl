@@ -129,6 +129,16 @@ end
     return nothing
 end
 
+# Bucket statistics of a distribution pass (bucket b holds bstart[b]:bstart[b+1]-1):
+# <prefix>_buckets_nonempty and the largest bucket, <prefix>_bucket_max.
+function count_buckets(prefix::Symbol, bstart::AbstractVector{Int})
+    INSTR[] || return nothing
+    sizes = diff(bstart)
+    count!(Symbol(prefix, :_buckets_nonempty), count(>(0), sizes))
+    countmax!(Symbol(prefix, :_bucket_max), maximum(sizes))
+    return nothing
+end
+
 # Tasks of a sort that hold a slot of its semaphore (src/parallel.jl), for the
 # counter concurrent_tasks_max: checks that ntasks bounds the parallelism.
 const ACTIVE_TASKS = Threads.Atomic{Int}(0)
@@ -150,18 +160,16 @@ end
 """
     @phase name expr
 
-Time `expr` under `name` when instrumentation is on.
+Time `expr` (a call or a `begin ... end` block) under `name` when
+instrumentation is on. `expr` is evaluated once, so a block is not duplicated;
+a `return` inside it skips the recording.
 """
 macro phase(name, ex)
     return quote
-        if INSTR[]
-            local t0 = time_ns()
-            local r = $(esc(ex))
-            record_phase!($(esc(name)), time_ns() - t0)
-            r
-        else
-            $(esc(ex))
-        end
+        local t0 = INSTR[] ? time_ns() : UInt64(0)
+        local r = $(esc(ex))
+        INSTR[] && record_phase!($(esc(name)), time_ns() - t0)
+        r
     end
 end
 
