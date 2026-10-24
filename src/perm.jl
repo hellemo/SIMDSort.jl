@@ -13,8 +13,21 @@
 # windows are equal are refined with the next window, as in an MSD radix sort.
 # Positions in the low bits make every step stable.
 
-"""Key sources: `keybits(ks, i, off, K)` returns bits `[off, off + K)` of key `i`."""
+"""
+Key sources. Each key is a big-endian bit string; the interface:
+
+- `keybits(ks, i, off, K)`: bits `[off, off + K)` of key `i` (K ≤ 63), zero
+  past the end, complemented for reverse order;
+- `keywidth(ks)`: the key length in bits, for fixed-width keys; or
+  `exhausted(ks, i, off)`: whether key `i` has no bits from `off` on;
+- `length_tiebreak(ks, a, b)`: the order of keys whose bits are all equal
+  (default 0; strings put the shorter first);
+- `finish_ties!(ks, perm)`: the same for a run of equal keys (default: none).
+"""
 abstract type KeySource end
+
+@inline exhausted(ks::KeySource, i::Int, off::Int) = off >= keywidth(ks)
+length_tiebreak(::KeySource, a::Int, b::Int) = 0
 
 # --- numbers -------------------------------------------------------------------
 
@@ -36,7 +49,6 @@ NumKeys(v::Vector{T}, rev::Bool) where {T} = NumKeys{T,unsigned(signedkey(T))}(v
 end
 
 keywidth(::NumKeys{T,U}) where {T,U} = 8sizeof(U)
-@inline exhausted(ks::NumKeys, i::Int, off::Int) = off >= keywidth(ks)
 
 @inline function keybits(ks::NumKeys{T,U}, i::Int, off::Int, K::Int) where {T,U}
     u = UInt64(ukey(U, @inbounds ks.v[i])) << (64 - 8sizeof(U))   # left-aligned
@@ -46,47 +58,68 @@ end
 
 # --- strings and symbols -------------------------------------------------------
 
-struct ByteKeys <: KeySource
-    ptr::Vector{Ptr{UInt8}}
+# Byte strings: `byteptr(ks, i)` and `bytelen(ks, i)` give key i's bytes
+# (the owner keeps them alive while they are read), `lentie(ks)` whether
+# byte-equal keys of different length differ (strings: the shorter first).
+abstract type AbstractByteKeys <: KeySource end
+
+# Strings and symbols, read in place. The lengths are kept in an array, so that
+# reading a window does not touch the string object for its length.
+struct ByteKeys{V<:AbstractVector} <: AbstractByteKeys
+    src::V
     len::Vector{Int}
     rev::Bool
-    lentie::Bool    # byte-equal keys of different length differ (strings)
 end
 
 # Strings read in place: String, SubString{String}, and (Julia 1.14+) StringViews
-# of contiguous byte vectors.
+# of contiguous byte vectors. Symbols: their names (NUL-free, NUL-terminated).
 @static if isdefined(Base, :DenseStringView)
     const ByteString = Union{String,SubString{String},Base.DenseStringView}
-    bytes_of(s::Base.DenseStringView) = (pointer(codeunits(s)), ncodeunits(s))
+    byteptr_of(s::Base.DenseStringView) = pointer(codeunits(s))
 else
     const ByteString = Union{String,SubString{String}}
 end
+byteptr_of(s::Union{String,SubString{String}}) = pointer(s)
+byteptr_of(s::Symbol) = Base.unsafe_convert(Ptr{UInt8}, s)
+bytelen_of(s::AbstractString) = ncodeunits(s)
+bytelen_of(s::Symbol) = Int(ccall(:strlen, Csize_t, (Ptr{UInt8},), byteptr_of(s)))
 
-# The bytes of a String, or the name of a Symbol (NUL-free, NUL-terminated). The
-# caller keeps the vector of values alive while the pointers are used.
-bytes_of(s::Union{String,SubString{String}}) = (pointer(s), ncodeunits(s))
-bytes_of(s::Symbol) = (p = Base.unsafe_convert(Ptr{UInt8}, s); (p, Int(ccall(:strlen, Csize_t, (Ptr{UInt8},), p))))
-
-function ByteKeys(v::AbstractVector, rev::Bool, ntasks::Int,
-                  ptr = Vector{Ptr{UInt8}}(undef, length(v)), len = Vector{Int}(undef, length(v)))
-    n = length(v)
-    tforeach(n, ntasks) do r
+function ByteKeys(v::AbstractVector, rev::Bool, ntasks::Int, len = Vector{Int}(undef, length(v)))
+    tforeach(length(v), ntasks) do r
         @inbounds for i in r
-            ptr[i], len[i] = bytes_of(v[i])
+            len[i] = bytelen_of(v[i])
         end
     end
-    return ByteKeys(ptr, len, rev, true)
+    return ByteKeys(v, len, rev)
 end
 
-@inline exhausted(ks::ByteKeys, i::Int, off::Int) = off >= 8 * @inbounds(ks.len[i])
+@inline byteptr(ks::ByteKeys, i::Int) = byteptr_of(@inbounds ks.src[i])
+@inline bytelen(ks::ByteKeys, i::Int) = @inbounds ks.len[i]
+lentie(::ByteKeys) = true
+nkeys(ks::ByteKeys) = length(ks.len)
 
-# Bits [off, off + K) of the zero-padded byte string, K ≤ 63. They lie within the
-# 9 bytes from byte off ÷ 8: the first 8 come from one big-endian load when they
-# are all inside the string, the ninth only supplies the low bits for a shift.
-# Bytes past the end read as zero; no byte past the end is loaded.
-@inline function keybits(ks::ByteKeys, i::Int, off::Int, K::Int)
-    p = @inbounds ks.ptr[i]
-    len = @inbounds ks.len[i]
+# Keys given as one byte string each, back to back in `bytes` (key i is
+# bytes[start[i]+1:start[i+1]]); equal values have identical encodings.
+struct EncodedKeys <: AbstractByteKeys
+    bytes::Vector{UInt8}
+    start::Vector{Int}
+    rev::Bool
+end
+@inline byteptr(ks::EncodedKeys, i::Int) = pointer(ks.bytes) + @inbounds(ks.start[i])
+@inline bytelen(ks::EncodedKeys, i::Int) = @inbounds(ks.start[i+1] - ks.start[i])
+lentie(::EncodedKeys) = false
+nkeys(ks::EncodedKeys) = length(ks.start) - 1
+
+@inline exhausted(ks::AbstractByteKeys, i::Int, off::Int) = off >= 8 * bytelen(ks, i)
+@inline keybits(ks::AbstractByteKeys, i::Int, off::Int, K::Int) =
+    bytebits(byteptr(ks, i), bytelen(ks, i), off, K, ks.rev)
+
+# Bits [off, off + K) of the zero-padded byte string at p (len bytes), K ≤ 63.
+# They lie within the 9 bytes from byte off ÷ 8: the first 8 come from one
+# big-endian load when they are all inside the string, the ninth only supplies
+# the low bits for a shift. Bytes past the end read as zero; no byte past the
+# end is loaded.
+@inline function bytebits(p::Ptr{UInt8}, len::Int, off::Int, K::Int, rev::Bool)
     b = off >> 3
     s = off & 7
     if b + 8 <= len
@@ -100,18 +133,25 @@ end
     lo = b + 8 < len ? unsafe_load(p, b + 9) : 0x00
     x = s == 0 ? hi : (hi << s) | (UInt64(lo) >> (8 - s))
     x >>= 64 - K
-    return ks.rev ? ~x & ((one(UInt64) << K) - one(UInt64)) : x
+    return rev ? ~x & ((one(UInt64) << K) - one(UInt64)) : x
+end
+
+function length_tiebreak(ks::AbstractByteKeys, a::Int, b::Int)
+    lentie(ks) || return 0
+    la, lb = bytelen(ks, a), bytelen(ks, b)
+    la == lb && return 0
+    return (la < lb) != ks.rev ? -1 : 1
 end
 
 # Strings equal as zero-padded bytes differ only in length; `isless` puts the
 # shorter first.
 finish_ties!(ks::KeySource, perm) = perm
-function finish_ties!(ks::ByteKeys, perm)
-    ks.lentie || return perm
+function finish_ties!(ks::AbstractByteKeys, perm)
+    lentie(ks) || return perm
     # Usually all lengths are equal (identical strings): nothing to do.
-    l1 = @inbounds ks.len[perm[1]]
-    all(i -> @inbounds(ks.len[i]) == l1, perm) && return perm
-    return sort!(perm; by = i -> @inbounds(ks.len[i]), rev = ks.rev, alg = Base.Sort.MergeSort)
+    l1 = bytelen(ks, perm[1])
+    all(i -> bytelen(ks, i) == l1, perm) && return perm
+    return sort!(perm; by = i -> bytelen(ks, i), rev = ks.rev, alg = Base.Sort.MergeSort)
 end
 
 # Full comparison of keys a and b from bit `off` on, for small runs: -1, 0 or 1.
@@ -121,10 +161,7 @@ function cmp_from(ks::KeySource, a::Int, b::Int, off::Int)
         x != y && return x < y ? -1 : 1
         off += 56
     end
-    (ks isa ByteKeys && ks.lentie) || return 0
-    la, lb = ks.len[a], ks.len[b]
-    la == lb && return 0
-    return (la < lb) != ks.rev ? -1 : 1
+    return length_tiebreak(ks, a, b)
 end
 
 # --- the windowed sort ---------------------------------------------------------
@@ -132,19 +169,11 @@ end
 const PERM_SMALL = 64       # runs up to this size are finished by insertion sort
 const PERM_PAR_MIN = 1 << 14
 
-# Apply `f(r)` to about `ntasks` contiguous ranges covering 1:n, concurrently.
-
-"""
-    refine!(ks, perm, off, ntasks)
-
-Reorder `perm` (positions whose keys agree on bits `[0, off)`, in a stable
-order) by the keys' bits from `off` on, stably.
-"""
 # The first 16 bytes of each byte string, big-endian and zero-padded. Kept aligned
 # with `perm` and permuted along with it, so that windows within them are read
 # sequentially instead of through the string pointers.
-function prefix_cache(ks::ByteKeys, ntasks::Int, pc = Vector{UInt128}(undef, length(ks.ptr)))
-    n = length(ks.ptr)
+function prefix_cache(ks::AbstractByteKeys, ntasks::Int, pc = Vector{UInt128}(undef, nkeys(ks)))
+    n = nkeys(ks)
     tforeach(n, ntasks) do r
         @inbounds for i in r
             pc[i] = (UInt128(keybits_raw(ks, i, 0)) << 64) | UInt128(keybits_raw(ks, i, 64))
@@ -154,9 +183,10 @@ function prefix_cache(ks::ByteKeys, ntasks::Int, pc = Vector{UInt128}(undef, len
 end
 
 # The 64 bits from bit `off` of byte string i, not complemented for `rev`.
-@inline keybits_raw(ks::ByteKeys, i::Int, off::Int) =
-    (keybits(ByteKeys(ks.ptr, ks.len, false, ks.lentie), i, off, 32) << 32) |
-    keybits(ByteKeys(ks.ptr, ks.len, false, ks.lentie), i, off + 32, 32)
+@inline function keybits_raw(ks::AbstractByteKeys, i::Int, off::Int)
+    p, len = byteptr(ks, i), bytelen(ks, i)
+    return (bytebits(p, len, off, 32, false) << 32) | bytebits(p, len, off + 32, 32, false)
+end
 
 # (A function, not a closure over `off`, which refine! reassigns.)
 function all_exhausted(ks::KeySource, perm, off::Int)
@@ -174,6 +204,12 @@ end
     return keybits(ks, @inbounds(perm[j]), off, K)
 end
 
+"""
+    refine!(ks, perm, off, ntasks)
+
+Reorder `perm` (positions whose keys agree on bits `[0, off)`, in a stable
+order) by the keys' bits from `off` on, stably.
+"""
 function refine!(ks::KeySource, perm::AbstractVector{Int}, off::Int, ntasks::Int, pc = nothing)
     m = length(perm)
     m <= 1 && return perm
@@ -332,13 +368,13 @@ function small_refine!(ks::KeySource, perm::AbstractVector{Int}, off::Int, pc)
     return perm
 end
 
-@inline function cmp_cached(ks::ByteKeys, a::Int, pa::UInt128, b::Int, pb::UInt128)
+@inline function cmp_cached(ks::AbstractByteKeys, a::Int, pa::UInt128, b::Int, pb::UInt128)
     if pa != pb
         return (pa < pb) != ks.rev ? -1 : 1
     end
-    la, lb = @inbounds(ks.len[a]), @inbounds(ks.len[b])
+    la, lb = bytelen(ks, a), bytelen(ks, b)
     (la <= 16 && lb <= 16) || return cmp_from(ks, a, b, 128)
-    (!ks.lentie || la == lb) && return 0
+    (!lentie(ks) || la == lb) && return 0
     return (la < lb) != ks.rev ? -1 : 1
 end
 cmp_cached(ks::KeySource, a, pa, b, pb) = cmp_from(ks, a, b, 0)
@@ -393,11 +429,10 @@ function simdsortperm(v::Vector{T}; rev::Bool=false,
     n = length(v)
     arena = ScratchArena()
     try
-        ptr = alloc!(arena, Ptr{UInt8}, n)
         len = alloc!(arena, Int, n)
         pc = alloc!(arena, UInt128, n)
         GC.@preserve v begin
-            ks = ByteKeys(v, rev, Int(ntasks), ptr, len)
+            ks = ByteKeys(v, rev, Int(ntasks), len)
             return refine!(ks, identity_perm(n, Int(ntasks)), 0, Int(ntasks), prefix_cache(ks, Int(ntasks), pc))
         end
     finally

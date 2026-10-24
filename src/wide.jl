@@ -11,7 +11,6 @@ end
 WideIntKeys(v::Vector{T}, rev::Bool) where {T} = WideIntKeys{T,typeof(unsigned(zero(T)))}(v, rev)
 
 keywidth(::WideIntKeys{T}) where {T} = 8sizeof(T)
-@inline exhausted(ks::WideIntKeys, i::Int, off::Int) = off >= keywidth(ks)
 
 @inline function keybits(ks::WideIntKeys{T,U}, i::Int, off::Int, K::Int) where {T,U}
     W = 8sizeof(T)
@@ -40,9 +39,10 @@ end
 
 # Order words of a wide integer: its unsigned form (sign bit flipped if signed),
 # most significant 64 bits first.
-# (A plain function, not @generated: a generator could not call methods of
-# integer types defined in packages loaded later, such as BitIntegers.)
-@generated nwords(::Type{T}) where {T} = :(Val($(8sizeof(T) ÷ 64)))   # sizeof is a builtin
+# nwords is generated so that the word count is a compile-time Val; it uses only
+# sizeof, a builtin, because a generator cannot call methods of integer types
+# defined in packages loaded later, such as BitIntegers.
+@generated nwords(::Type{T}) where {T} = :(Val($(8sizeof(T) ÷ 64)))
 
 @inline function intwords(x::T) where {T}
     W = 8sizeof(T)
@@ -71,20 +71,36 @@ end
 
 # --- byte encodings ------------------------------------------------------------
 
-# Keys given as one byte string each, stored back to back in `bytes`; `lentie`
-# is false because equal values have identical encodings.
-function encoded_keys(bytes::Vector{UInt8}, start::Vector{Int}, rev::Bool)
-    n = length(start) - 1
-    base = pointer(bytes)
-    ptr = [base + start[i] for i in 1:n]
-    len = [start[i+1] - start[i] for i in 1:n]
-    return ByteKeys(ptr, len, rev, false)
+# The number of 64-bit limbs of |x| (0 for 0).
+nlimbs(x::BigInt) = iszero(x) ? 0 : cld(Int(Base.GMP.MPZ.sizeinbase(x, 2)), 64)
+
+# x as 8 big-endian bytes at bytes[pos+1:pos+8].
+@inline function put64!(bytes::Vector{UInt8}, pos::Int, x::UInt64)
+    @inbounds for k in 1:8
+        bytes[pos+k] = (x >> (64 - 8k)) % UInt8
+    end
+    return bytes
 end
 
-@inline put64!(bytes::Vector{UInt8}, pos::Int, x::UInt64) =
-    GC.@preserve bytes unsafe_store!(Ptr{UInt64}(pointer(bytes, pos + 1)), hton(x))
-
-const LIMB = Base.GMP.Limb
+# The magnitude of x as nbytes big-endian bytes at bytes[pos+1:pos+nbytes],
+# right-aligned (GMP's documented mpz_export; |x| < 2^(8nbytes)), complemented
+# if neg.
+function put_magnitude!(bytes::Vector{UInt8}, pos::Int, x::BigInt, nbytes::Int, neg::Bool)
+    used = Base.GMP.MPZ.sizeinbase(x, 256)
+    iszero(x) && (used = 0)
+    fill!(view(bytes, pos+1:pos+nbytes-used), 0x00)
+    if used > 0
+        GC.@preserve bytes ccall((:__gmpz_export, Base.GMP.libgmp), Ptr{Cvoid},
+                                 (Ptr{UInt8}, Ptr{Csize_t}, Cint, Csize_t, Cint, Csize_t, Ref{BigInt}),
+                                 pointer(bytes, pos + nbytes - used + 1), C_NULL, 1, 1, 1, 0, x)
+    end
+    if neg
+        @inbounds for k in pos+1:pos+nbytes
+            bytes[k] = ~bytes[k]
+        end
+    end
+    return bytes
+end
 
 # BigInt: an 8-byte header 2^63 + nlimbs (≥ 0) or 2^63 - nlimbs (< 0), then the
 # magnitude limbs from the most significant, complemented for negative numbers.
@@ -95,18 +111,15 @@ function encode(v::Vector{BigInt})
     start = Vector{Int}(undef, n + 1)
     start[1] = 0
     for i in 1:n
-        start[i+1] = start[i] + 8 + 8 * abs(v[i].size)
+        start[i+1] = start[i] + 8 + 8 * nlimbs(v[i])
     end
     bytes = Vector{UInt8}(undef, start[end])
     for i in 1:n
         x = v[i]
-        k = Int(abs(x.size))
-        neg = x.size < 0
+        k = nlimbs(x)
+        neg = x < 0
         put64!(bytes, start[i], neg ? (UInt64(1) << 63) - UInt64(k) : (UInt64(1) << 63) + UInt64(k))
-        GC.@preserve x for j in 1:k
-            limb = UInt64(unsafe_load(x.d, k - j + 1))
-            put64!(bytes, start[i] + 8j, neg ? ~limb : limb)
-        end
+        put_magnitude!(bytes, start[i] + 8, x, 8k, neg)
     end
     return bytes, start
 end
@@ -142,11 +155,7 @@ function encode(v::Vector{BigFloat})
             put64!(bytes, pos, neg ? (UInt64(1) << 62) - UInt64(E + (1 << 40)) :
                                      (UInt64(1) << 62) + 2 + UInt64(E + (1 << 40)))
             m = abs(z) << (64L - p)            # top-aligned in L limbs
-            k = Int(abs(m.size))
-            GC.@preserve m for j in 1:L
-                limb = j <= k ? UInt64(unsafe_load(m.d, k - j + 1)) : zero(UInt64)
-                put64!(bytes, pos + 8j, neg ? ~limb : limb)
-            end
+            put_magnitude!(bytes, pos + 8, m, 8L, neg)
         end
     end
     return bytes, start
@@ -156,7 +165,7 @@ function simdsortperm(v::Vector{T}; rev::Bool=false, ntasks::Integer=1) where {T
     length(v) <= 1 && return collect(1:length(v))
     bytes, start = encode(v)
     GC.@preserve bytes begin
-        return refine!(encoded_keys(bytes, start, rev), collect(1:length(v)), 0, Int(ntasks))
+        return refine!(EncodedKeys(bytes, start, rev), collect(1:length(v)), 0, Int(ntasks))
     end
 end
 
@@ -181,7 +190,6 @@ end
 WordKeys{M}(w::AbstractVector{NTuple{M,UInt64}}, rev::Bool) where {M} = WordKeys{M,typeof(w)}(w, rev)
 
 keywidth(::WordKeys{M}) where {M} = 64M
-@inline exhausted(ks::WordKeys, i::Int, off::Int) = off >= keywidth(ks)
 
 # Bits [off, off + K) (K ≤ 63) lie within words q and q + 1, q = off ÷ 64.
 @inline keybits(ks::WordKeys, i::Int, off::Int, K::Int) = wordbits(@inbounds(ks.w[i]), off, K, ks.rev)
