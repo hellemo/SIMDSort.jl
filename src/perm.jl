@@ -58,8 +58,8 @@ end
 
 # --- strings and symbols -------------------------------------------------------
 
-# Byte strings: `byteptr(ks, i)` and `bytelen(ks, i)` give key i's bytes
-# (the owner keeps them alive while they are read), `lentie(ks)` whether
+# Byte strings: `bytesrc(ks, i)` gives key i's bytes as (source, base), byte j
+# being byteat(source, base + j); `bytelen(ks, i)` its length; `lentie(ks)` whether
 # byte-equal keys of different length differ (strings: the shorter first).
 abstract type AbstractByteKeys <: KeySource end
 
@@ -75,11 +75,11 @@ end
 # of contiguous byte vectors. Symbols: their names (NUL-free, NUL-terminated).
 @static if isdefined(Base, :DenseStringView)
     const ByteString = Union{String,SubString{String},Base.DenseStringView}
-    byteptr_of(s::Base.DenseStringView) = pointer(codeunits(s))
 else
     const ByteString = Union{String,SubString{String}}
 end
-byteptr_of(s::Union{String,SubString{String}}) = pointer(s)
+# A symbol's name has no array of code units, so it is read through a pointer:
+# symbols are never freed.
 byteptr_of(s::Symbol) = Base.unsafe_convert(Ptr{UInt8}, s)
 bytelen_of(s::AbstractString) = ncodeunits(s)
 bytelen_of(s::Symbol) = Int(ccall(:strlen, Csize_t, (Ptr{UInt8},), byteptr_of(s)))
@@ -93,7 +93,9 @@ function ByteKeys(v::AbstractVector, rev::Bool, ntasks::Int, len = Vector{Int}(u
     return ByteKeys(v, len, rev)
 end
 
-@inline byteptr(ks::ByteKeys, i::Int) = byteptr_of(@inbounds ks.src[i])
+@inline bytesrc(ks::ByteKeys, i::Int) = (bytes_of(@inbounds ks.src[i]), 0)
+@inline bytes_of(s::AbstractString) = codeunits(s)
+@inline bytes_of(s::Symbol) = byteptr_of(s)
 @inline bytelen(ks::ByteKeys, i::Int) = @inbounds ks.len[i]
 lentie(::ByteKeys) = true
 nkeys(ks::ByteKeys) = length(ks.len)
@@ -105,32 +107,45 @@ struct EncodedKeys <: AbstractByteKeys
     start::Vector{Int}
     rev::Bool
 end
-@inline byteptr(ks::EncodedKeys, i::Int) = pointer(ks.bytes) + @inbounds(ks.start[i])
+@inline bytesrc(ks::EncodedKeys, i::Int) = (ks.bytes, @inbounds ks.start[i])
 @inline bytelen(ks::EncodedKeys, i::Int) = @inbounds(ks.start[i+1] - ks.start[i])
 lentie(::EncodedKeys) = false
 nkeys(ks::EncodedKeys) = length(ks.start) - 1
 
 @inline exhausted(ks::AbstractByteKeys, i::Int, off::Int) = off >= 8 * bytelen(ks, i)
 @inline keybits(ks::AbstractByteKeys, i::Int, off::Int, K::Int) =
-    bytebits(byteptr(ks, i), bytelen(ks, i), off, K, ks.rev)
+    bytebits(bytesrc(ks, i)..., bytelen(ks, i), off, K, ks.rev)
 
-# Bits [off, off + K) of the zero-padded byte string at p (len bytes), K ≤ 63.
-# They lie within the 9 bytes from byte off ÷ 8: the first 8 come from one
-# big-endian load when they are all inside the string, the ninth only supplies
-# the low bits for a shift. Bytes past the end read as zero; no byte past the
-# end is loaded.
-@inline function bytebits(p::Ptr{UInt8}, len::Int, off::Int, K::Int, rev::Bool)
+# Byte j (1-based) after base, and 8 bytes from base + 1 as a big-endian UInt64,
+# from code units (safe: one movbe, as the pointer load) or a symbol's name.
+@inline byteat(cu::AbstractVector{UInt8}, j::Int) = @inbounds cu[j]
+@inline byteat(p::Ptr{UInt8}, j::Int) = unsafe_load(p, j)
+@inline function load_be64(cu::AbstractVector{UInt8}, base::Int)
+    x = zero(UInt64)
+    @inbounds for j in 1:8      # little-endian assembly + bswap: LLVM fuses it into one load
+        x |= UInt64(cu[base+j]) << (8 * (j - 1))
+    end
+    return bswap(x)
+end
+@inline load_be64(p::Ptr{UInt8}, base::Int) = ntoh(unsafe_load(Ptr{UInt64}(p + base)))
+
+# Bits [off, off + K) of the zero-padded byte string (bytes base+1:base+len of
+# src), K ≤ 63. They lie within the 9 bytes from byte off ÷ 8: the first 8 come
+# from one big-endian load when they are all inside the string, the ninth only
+# supplies the low bits for a shift. Bytes past the end read as zero; no byte
+# past the end is loaded.
+@inline function bytebits(src, base::Int, len::Int, off::Int, K::Int, rev::Bool)
     b = off >> 3
     s = off & 7
     if b + 8 <= len
-        hi = ntoh(unsafe_load(Ptr{UInt64}(p + b)))
+        hi = load_be64(src, base + b)
     else
         hi = zero(UInt64)
         for j in 0:min(7, len - b - 1)
-            hi |= UInt64(unsafe_load(p, b + j + 1)) << (56 - 8j)
+            hi |= UInt64(byteat(src, base + b + j + 1)) << (56 - 8j)
         end
     end
-    lo = b + 8 < len ? unsafe_load(p, b + 9) : 0x00
+    lo = b + 8 < len ? byteat(src, base + b + 9) : 0x00
     x = s == 0 ? hi : (hi << s) | (UInt64(lo) >> (8 - s))
     x >>= 64 - K
     return rev ? ~x & ((one(UInt64) << K) - one(UInt64)) : x
@@ -184,8 +199,9 @@ end
 
 # The 64 bits from bit `off` of byte string i, not complemented for `rev`.
 @inline function keybits_raw(ks::AbstractByteKeys, i::Int, off::Int)
-    p, len = byteptr(ks, i), bytelen(ks, i)
-    return (bytebits(p, len, off, 32, false) << 32) | bytebits(p, len, off + 32, 32, false)
+    src, base = bytesrc(ks, i)
+    len = bytelen(ks, i)
+    return (bytebits(src, base, len, off, 32, false) << 32) | bytebits(src, base, len, off + 32, 32, false)
 end
 
 # (A function, not a closure over `off`, which refine! reassigns.)
