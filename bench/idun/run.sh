@@ -21,6 +21,12 @@ mkdir -p "$OUT"
 OUT=$(cd "$OUT" && pwd)
 export OUT NT BENCH_RESULTS="$OUT" JULIA_NUM_THREADS=$NT
 export SIMDSORT_LIB=${SIMDSORT_LIB:-$(cd ../ChapelSort.jl/bench/simd 2>/dev/null && pwd)/libsimdsort.so}
+# One package depot for setup (login node) and the job: off the small home
+# quota if /cluster/work exists. JULIA_DEPOT_PATH set by the caller wins.
+if [ -z "${JULIA_DEPOT_PATH:-}" ] && [ -d "/cluster/work/$USER" ]; then
+    export JULIA_DEPOT_PATH="/cluster/work/$USER/julia_depot"
+fi
+echo "julia: $(command -v julia || echo 'NOT FOUND'), depot: ${JULIA_DEPOT_PATH:-~/.julia}, NT=$NT"
 QUICK=${QUICK:-0}
 if [ "$QUICK" = 1 ]; then R1=3; R2=1; XMAX=26; else R1=${ROUNDS:-9}; R2=${ROUNDS:-3}; XMAX=28; fi
 JL="julia --startup-file=no"
@@ -39,7 +45,10 @@ step_env() {
     } > "$OUT/system.txt" 2>&1
     $JL --project=. $HERE/env.jl > "$OUT/julia_env.txt" 2>&1
 }
-step_setup() { $JL --project=bench -e 'using Pkg; Pkg.instantiate(); Pkg.precompile()'; }
+step_setup() {
+    $JL --version
+    $JL --project=bench -e 'using Pkg; println("depot: ", DEPOT_PATH[1]); Pkg.instantiate(); Pkg.precompile()'
+}
 step_test()  { $JL --project=. -e 'using Pkg; Pkg.test()'; }
 step_build() { ../ChapelSort.jl/bench/simd/build.sh; }
 step_codegen()    { $JL --project=bench $HERE/codegen.jl; }
@@ -56,8 +65,13 @@ printf "step\tstatus\tseconds\n" >> "$OUT/steps.tsv"
 for s in "${STEPS[@]}"; do
     echo "== $s ($(date +%T)), log: $OUT/$s.log"
     t0=$(date +%s)
-    "step_$s" > "$OUT/$s.log" 2>&1
-    st=$?
+    if [ "$s" = setup ] || [ "$s" = build ]; then
+        "step_$s" 2>&1 | tee "$OUT/$s.log"          # interactive steps: show progress
+        st=${PIPESTATUS[0]}
+    else
+        "step_$s" > "$OUT/$s.log" 2>&1
+        st=$?
+    fi
     printf "%s\t%s\t%s\n" "$s" "$st" "$(( $(date +%s) - t0 ))" >> "$OUT/steps.tsv"
     [ $st -ne 0 ] && echo "   step $s failed ($st), see $OUT/$s.log"
 done

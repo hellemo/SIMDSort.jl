@@ -22,8 +22,7 @@ mkdir -p bench/idun/results
 module load Julia/1.13 2>/dev/null || true
 module load GCC CMake 2>/dev/null || true
 export PATH="$HOME/.juliaup/bin:$PATH"
-# Keep the package depot off the small home quota if /cluster/work exists.
-[ -d "/cluster/work/$USER" ] && export JULIA_DEPOT_PATH="/cluster/work/$USER/julia_depot${JULIA_DEPOT_PATH:+:$JULIA_DEPOT_PATH}"
+# The package depot is chosen in run.sh (same for setup and job).
 grep -q avx512f /proc/cpuinfo || echo "WARNING: no AVX-512 on $(hostname); results are still useful as a second x86 machine"
 export NT=${SLURM_CPUS_ON_NODE:-$(nproc)}
 bash bench/idun/run.sh "$@"
