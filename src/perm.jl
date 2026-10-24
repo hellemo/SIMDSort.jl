@@ -184,8 +184,8 @@ function refine!(ks::KeySource, perm::AbstractVector{Int}, off::Int, ntasks::Int
     ib = 8sizeof(Int) - leading_zeros(m - 1)       # bits for local positions
     K = 64 - ib
     mask = (one(UInt64) << ib) - one(UInt64)
-    keys, hk = scratch_vector(UInt64, m)
-    ho = C_NULL
+    arena = ScratchArena()
+    keys = alloc!(arena, UInt64, m)
     try
         while true
             # The windows, and the bits in which any of them differs from the
@@ -204,7 +204,7 @@ function refine!(ks::KeySource, perm::AbstractVector{Int}, off::Int, ntasks::Int
         count!(:window_sorts)
         count!(:window_keys, m)
         simdsort!(keys; ntasks)
-        old, ho = scratch_vector(Int, m)
+        old = alloc!(arena, Int, m)
         @phase :window_gather begin
             tforeach(m, ntasks) do r
                 @inbounds for j in r
@@ -240,7 +240,7 @@ function refine!(ks::KeySource, perm::AbstractVector{Int}, off::Int, ntasks::Int
         end
         return perm
     finally
-        free_scratch(hk); free_scratch(ho)
+        release!(arena)
     end
 end
 
@@ -349,8 +349,9 @@ cmp_cached(ks::KeySource, a, pa, b, pb) = cmp_from(ks, a, b, 0)
 `v .= v[p]`, gathering and copying back with up to `ntasks` tasks.
 """
 function permute_by!(v::AbstractVector{T}, p::Vector{Int}, ntasks::Int) where {T}
-    w, h = scratch_vector(T, length(v))
+    arena = ScratchArena()
     try
+        w = alloc!(arena, T, length(v))
         tforeach(length(v), ntasks) do r
             @inbounds for i in r
                 w[i] = v[p[i]]
@@ -363,7 +364,7 @@ function permute_by!(v::AbstractVector{T}, p::Vector{Int}, ntasks::Int) where {T
         end
         return v
     finally
-        free_scratch(h)
+        release!(arena)
     end
 end
 
@@ -390,16 +391,17 @@ function simdsortperm(v::Vector{T}; rev::Bool=false,
         r === nothing || return simdsortperm(r[1]; rev, ntasks)
     end
     n = length(v)
-    ptr, h1 = scratch_vector(Ptr{UInt8}, n)
-    len, h2 = scratch_vector(Int, n)
-    pc, h3 = scratch_vector(UInt128, n)
+    arena = ScratchArena()
     try
+        ptr = alloc!(arena, Ptr{UInt8}, n)
+        len = alloc!(arena, Int, n)
+        pc = alloc!(arena, UInt128, n)
         GC.@preserve v begin
             ks = ByteKeys(v, rev, Int(ntasks), ptr, len)
             return refine!(ks, identity_perm(n, Int(ntasks)), 0, Int(ntasks), prefix_cache(ks, Int(ntasks), pc))
         end
     finally
-        free_scratch(h1); free_scratch(h2); free_scratch(h3)
+        release!(arena)
     end
 end
 

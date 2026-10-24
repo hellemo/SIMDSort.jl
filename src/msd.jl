@@ -69,9 +69,10 @@ function sort_by_words!(v::Vector{T}, f::F, rev::Bool, ntasks::Int) where {T,F}
     cs = chunks(n, ntasks)
     nc = length(cs)
     counts = zeros(Int, nb, nc)
-    bk, hb = scratch_vector(UInt8, n)
-    tv, ht = scratch_vector(T, n)
+    arena = ScratchArena()
     try
+        bk = alloc!(arena, UInt8, n)
+        tv = alloc!(arena, T, n)
         @phase :msd_count begin
             tforeach_index(nc) do c
                 cnt = zeros(Int, nb)
@@ -108,45 +109,24 @@ function sort_by_words!(v::Vector{T}, f::F, rev::Bool, ntasks::Int) where {T,F}
             end
         end
         @phase :msd_finish begin
-            # Sort every bucket from the scratch array back into v, in cache, with
-            # scratch buffers reused across the buckets of a task (fresh buffers of this
-            # size are malloc'ed and page-faulted each time).
-            bmax = maximum(b -> bstart[b+1] - bstart[b], 1:nb)
-            if ntasks <= 1
-                finish_buckets!(v, tv, bstart, 1:nb, f, rev, bmax)
-            else
-                # Groups of buckets of about equal size, several per task, at most
-                # ntasks running at a time.
-                # One pair of scratch buffers per running task (at most ntasks), shared
-                # by the groups: a pair per group allocated ~64 MB at 8 tasks.
-                pool = Channel{Tuple{Vector{UInt64},Vector{Int}}}(ntasks)
-                for _ in 1:ntasks
-                    put!(pool, (Vector{UInt64}(undef, bmax), Vector{Int}(undef, bmax)))
-                end
-                groups = balanced_groups(diff(bstart), cld(n, 8ntasks))
-                run_limited(bs -> finish_buckets!(v, tv, bstart, bs, f, rev, pool), groups, ntasks)
+            # Sort every bucket from the scratch array back into v, in cache:
+            # groups of buckets of about equal size on ntasks workers, each with
+            # one pair of scratch buffers reused for all its buckets (fresh
+            # buffers per group allocated ~64 MB at 8 tasks).
+            sizes = diff(bstart)
+            bmax = maximum(sizes)
+            groups = ntasks <= 1 ? [1:nb] : balanced_groups(sizes, cld(n, 8ntasks))
+            tworkers(groups, ntasks; init = () -> (Vector{UInt64}(undef, bmax), Vector{Int}(undef, bmax))) do (keys, idx), bs
+                finish_buckets!(v, tv, bstart, bs, f, rev, keys, idx)
             end
         end
         return v
     finally
-        free_scratch(hb); free_scratch(ht)
+        release!(arena)
     end
 end
 
-# Finish buckets bs with one set of scratch buffers.
-function finish_buckets!(v, tv, bstart, bs, f::F, rev::Bool, bmax::Int) where {F}
-    finish_buckets!(v, tv, bstart, bs, f, rev, Vector{UInt64}(undef, bmax), Vector{Int}(undef, bmax))
-end
-
-# With buffers from a pool of the running tasks.
-function finish_buckets!(v, tv, bstart, bs, f::F, rev::Bool, pool::Channel) where {F}
-    keys, idx = take!(pool)
-    try
-        finish_buckets!(v, tv, bstart, bs, f, rev, keys, idx)
-    finally
-        put!(pool, (keys, idx))
-    end
-end
+# Finish buckets bs with one pair of scratch buffers.
 
 function finish_buckets!(v, tv, bstart, bs, f::F, rev::Bool, keys::Vector{UInt64}, idx::Vector{Int}) where {F}
     for b in bs
@@ -279,9 +259,10 @@ function distribute_sort!(p::Ptr{S}, n::Int, ntasks::Int) where {S}
     cs = chunks(n, ntasks)
     nc = length(cs)
     counts = zeros(Int, nb, nc)
-    bk, hb = scratch_vector(UInt16, n)
-    tv, ht = scratch_vector(S, n)
+    arena = ScratchArena()
     try
+        bk = alloc!(arena, UInt16, n)
+        tv = alloc!(arena, S, n)
         @phase :dist_count begin
             tforeach_index(nc) do c
                 dist_count!(counts, bk, k, spl, cs[c], c, Val(nb))
@@ -310,7 +291,7 @@ function distribute_sort!(p::Ptr{S}, n::Int, ntasks::Int) where {S}
         end
         return true
     finally
-        free_scratch(hb); free_scratch(ht)
+        release!(arena)
     end
 end
 

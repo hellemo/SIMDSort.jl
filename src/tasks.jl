@@ -7,6 +7,8 @@
 #   tmapreduce(f, op, n, ntasks; minlen)   op over f(r) for the chunks of 1:n
 #   balanced_groups(sizes, target)   consecutive items in groups of ~target size
 #   run_limited(f, groups, ntasks)   f(g) for each group, at most ntasks at once
+#   tworkers(f, groups, ntasks; init)   the same with ntasks workers that each own
+#                                    a state init() (e.g. scratch buffers)
 #
 # The parallel quicksort (pqsort!) and ppartition! spawn their own tasks: see
 # src/parallel.jl.
@@ -87,6 +89,41 @@ spawn_limited(f, sem::Base.Semaphore) = Threads.@spawn begin
         leave_task!()
         Base.release(sem)
     end
+end
+
+# f(state, g) for each g in groups, on at most ntasks workers. Each worker makes
+# its state once with init() and takes the next group from a shared counter
+# (dynamic load balance); the number of workers bounds the parallelism.
+function tworkers(f::F, groups::AbstractVector, ntasks::Integer; init::I = () -> nothing) where {F,I}
+    nw = min(max(1, Int(ntasks)), length(groups))
+    counter = Threads.Atomic{Int}(1)
+    if nw <= 1
+        worker_loop(f, init, groups, counter)
+    else
+        @sync for _ in 1:nw
+            Threads.@spawn begin
+                enter_task!()
+                try
+                    worker_loop(f, init, groups, counter)
+                finally
+                    leave_task!()
+                end
+            end
+        end
+    end
+    return nothing
+end
+
+# One worker of tworkers, with its own state. (A function, so that each worker's
+# state is its own variable, not one captured and shared by all.)
+function worker_loop(f::F, init::I, groups, counter) where {F,I}
+    st = init()
+    while true
+        i = Threads.atomic_add!(counter, 1)
+        i > length(groups) && break
+        f(st, groups[i])
+    end
+    return nothing
 end
 
 function run_limited(f::F, groups, ntasks::Integer) where {F}

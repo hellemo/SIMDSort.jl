@@ -6,23 +6,39 @@
 # node String sortperm got slower than on one thread. Memory from malloc is not
 # counted by the GC, so it triggers no collection.
 #
-#   buf, h = scratch_vector(T, n)
-#   try ... finally free_scratch(h) end
+#   arena = ScratchArena()
+#   try
+#       buf = alloc!(arena, T, n)
+#       ...
+#   finally
+#       release!(arena)
+#   end
 #
-# `buf` must not escape: it is freed by free_scratch. Small buffers, and
-# buffers of non-bits types (which hold GC references), come from the GC
-# (h == C_NULL). (No closure-taking
-# helper: closures over reassigned variables get boxed.)
+# Buffers from an arena must not outlive release!. Small buffers, and buffers of
+# non-bits types (which hold GC references), are ordinary GC arrays. An arena
+# is filled from one task (allocate before spawning); its buffers may be used
+# by any task. (No closure-taking helper: closures over reassigned variables
+# get boxed.)
 
 const MALLOC_MIN_BYTES = 1 << 20
 
-function scratch_vector(::Type{T}, n::Integer) where {T}
-    (isbitstype(T) && Int(n) * sizeof(T) >= MALLOC_MIN_BYTES) || return Vector{T}(undef, n), C_NULL
+struct ScratchArena
+    blocks::Vector{Ptr{Cvoid}}
+end
+ScratchArena() = ScratchArena(Ptr{Cvoid}[])
+
+function alloc!(arena::ScratchArena, ::Type{T}, n::Integer) where {T}
+    (isbitstype(T) && Int(n) * sizeof(T) >= MALLOC_MIN_BYTES) || return Vector{T}(undef, n)
     nb = Int(n) * sizeof(T)
     p = Libc.malloc(nb)
     p == C_NULL && throw(OutOfMemoryError())
+    push!(arena.blocks, p)
     count!(:malloc_bytes, nb)
-    return unsafe_wrap(Array, Ptr{T}(p), Int(n); own = false), p
+    return unsafe_wrap(Array, Ptr{T}(p), Int(n); own = false)
 end
 
-free_scratch(h::Ptr{Cvoid}) = (h == C_NULL || Libc.free(h); nothing)
+function release!(arena::ScratchArena)
+    foreach(Libc.free, arena.blocks)
+    empty!(arena.blocks)
+    return nothing
+end
