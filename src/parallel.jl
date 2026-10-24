@@ -21,7 +21,7 @@ by its own task. Then the keys `> pivot` that ended up in `[0, m)` are swapped
 with the keys `≤ pivot` in `[m, n)`; both sets have the same size, `X`, and each
 task swaps an equal slice of them.
 """
-function ppartition!(p::Ptr{T}, n::Int, pivot::T, ntasks::Int) where {T}
+function ppartition!(p::KeyRef{T}, n::Int, pivot::T, ntasks::Int) where {T}
     count!(:parallel_partitions)
     bounds = [div(n * i, ntasks) for i in 0:ntasks]
     counts = Vector{Int}(undef, ntasks)
@@ -30,8 +30,7 @@ function ppartition!(p::Ptr{T}, n::Int, pivot::T, ntasks::Int) where {T}
             buf = scratch(T)
             lo = bounds[i]
             GC.@preserve buf begin
-                counts[i] = partition_auto!(p + lo * sizeof(T), bounds[i+1] - lo, pivot,
-                                            pointer(buf))
+                counts[i] = partition_auto!(shift(p, lo), bounds[i+1] - lo, pivot, scratchref(p, buf))
             end
         end
     end
@@ -57,14 +56,14 @@ function ppartition!(p::Ptr{T}, n::Int, pivot::T, ntasks::Int) where {T}
 end
 
 # Swap the misplaced keys with ranks [from, to) of `big` and `small`.
-function swap_runs!(p::Ptr{T}, big, small, from::Int, to::Int) where {T}
+function swap_runs!(p::KeyRef{T}, big, small, from::Int, to::Int) where {T}
     i, oi = locate(big, from)
     j, oj = locate(small, from)
     k = from
     while k < to
         (sa, la), (sb, lb) = big[i], small[j]
         len = min(la - oi, lb - oj, to - k)
-        swap_block!(p + (sa + oi) * sizeof(T), p + (sb + oj) * sizeof(T), len)
+        swap_block!(shift(p, sa + oi), shift(p, sb + oj), len)
         k += len
         oi += len
         oj += len
@@ -83,7 +82,7 @@ function locate(runs, r::Int)
     return length(runs) + 1, 0
 end
 
-function swap_block!(a::Ptr{T}, b::Ptr{T}, len::Int) where {T}
+function swap_block!(a::KeyRef{T}, b::KeyRef{T}, len::Int) where {T}
     N = lanes(T)
     i = 0
     while i + N <= len
@@ -93,9 +92,9 @@ function swap_block!(a::Ptr{T}, b::Ptr{T}, len::Int) where {T}
         i += N
     end
     while i < len
-        x = unsafe_load(a, i + 1)
-        unsafe_store!(a, unsafe_load(b, i + 1), i + 1)
-        unsafe_store!(b, x, i + 1)
+        x = ld(a, i + 1)
+        st!(a, ld(b, i + 1), i + 1)
+        st!(b, x, i + 1)
         i += 1
     end
     return nothing
@@ -118,14 +117,14 @@ partitioned with `ppartition!`, by as many tasks as their share
 The caller holds a slot of `sem` (`ntasks` slots); `pqsort!` gives it back
 before waiting for its tasks, each of which takes its own.
 """
-function pqsort!(p::Ptr{T}, n::Int, depth::Int, s::UInt64, ntasks::Int, total::Int) where {T}
+function pqsort!(p::KeyRef{T}, n::Int, depth::Int, s::UInt64, ntasks::Int, total::Int) where {T}
     sem = Base.Semaphore(ntasks)
     Base.acquire(sem)
     enter_task!()
     return pqsort!(p, n, depth, s, ntasks, total, sem)
 end
 
-function pqsort!(p::Ptr{T}, n::Int, depth::Int, s::UInt64, ntasks::Int, total::Int,
+function pqsort!(p::KeyRef{T}, n::Int, depth::Int, s::UInt64, ntasks::Int, total::Int,
                  sem::Base.Semaphore) where {T}
     buf = scratch(T)
     tasks = Task[]
@@ -134,18 +133,18 @@ function pqsort!(p::Ptr{T}, n::Int, depth::Int, s::UInt64, ntasks::Int, total::I
     GC.@preserve buf begin
         while n > grain && depth > 0
             depth -= 1
-            pivot, dup, s = choose_pivot(p, n, s, pointer(buf))
+            pivot, dup, s = choose_pivot(p, n, s, scratchref(p, buf))
             nt = clamp(round(Int, ntasks * n / total), 1, ntasks)
             if dup && nt > 1 && n > PPART_MIN && has_prev(pivot)
                 # The three-way partition is serial. For a range this large, two
                 # parallel partitions are faster: around the pivot, then the left
                 # side around the next smaller key, which splits off the keys
                 # equal to the pivot.
-                b = part(p, n, pivot, pointer(buf), nt)
-                a = b >= 2UNROLL * lanes(T) ? part(p, b, prevkey(pivot), pointer(buf), nt) : b
+                b = part(p, n, pivot, scratchref(p, buf), nt)
+                a = b >= 2UNROLL * lanes(T) ? part(p, b, prevkey(pivot), scratchref(p, buf), nt) : b
             else
-                a, b = split!(p, n, pivot, dup, pointer(buf),
-                              (p, n, x) -> part(p, n, x, pointer(buf), nt))
+                a, b = split!(p, n, pivot, dup, scratchref(p, buf),
+                              (p, n, x) -> part(p, n, x, scratchref(p, buf), nt))
             end
             if a == n
                 # As in qsort!: the pivot is the maximum.
@@ -154,15 +153,15 @@ function pqsort!(p::Ptr{T}, n::Int, depth::Int, s::UInt64, ntasks::Int, total::I
                     alldone = true
                     break
                 end
-                m = part(p, n, mn, pointer(buf), nt)
-                p += m * sizeof(T)
+                m = part(p, n, mn, scratchref(p, buf), nt)
+                p = shift(p, m)
                 n -= m
                 continue
             end
             # Hand the smaller side to a new task, keep the larger one. [a, b) is
             # done.
             small = min(a, n - b)
-            ps, pl, nl = a <= n - b ? (p, p + b * sizeof(T), n - b) : (p + b * sizeof(T), p, a)
+            ps, pl, nl = a <= n - b ? (p, shift(p, b), n - b) : (shift(p, b), p, a)
             s = xorshift(s)
             count!(:spawned_tasks)
             push!(tasks, Threads.@spawn begin
@@ -172,7 +171,7 @@ function pqsort!(p::Ptr{T}, n::Int, depth::Int, s::UInt64, ntasks::Int, total::I
             end)
             p, n = pl, nl
         end
-        alldone || qsort!(p, n, pointer(buf), depth, s)
+        alldone || qsort!(p, n, scratchref(p, buf), depth, s)
     end
     leave_task!()
     Base.release(sem)
@@ -180,6 +179,6 @@ function pqsort!(p::Ptr{T}, n::Int, depth::Int, s::UInt64, ntasks::Int, total::I
     return nothing
 end
 
-@inline part(p::Ptr{T}, n, pivot, buf, ntasks) where {T} =
+@inline part(p::KeyRef{T}, n, pivot, buf, ntasks) where {T} =
     n > PPART_MIN && ntasks > 1 ? ppartition!(p, n, pivot, ntasks) :
                                   partition_auto!(p, n, pivot, buf)

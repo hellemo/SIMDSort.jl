@@ -5,13 +5,11 @@
 # unrolled loop, the last keys through a buffer. Our own: vpartition + two
 # full-width stores (instead of compress-stores), software prefetch, and the
 # three-way variant.
-# Offsets are 0-based element offsets from the pointer `p`.
+# Offsets are 0-based element offsets into the key reference `p` (keyref.jl).
 
-@inline vld(::Val{N}, p::Ptr{T}, i::Int) where {N,T} = vload(Vec{N,T}, p + i * sizeof(T))
-@inline vst(v::Vec, p::Ptr{T}, i::Int) where {T} = vstore(v, p + i * sizeof(T))
 # U consecutive vectors from offset i. (A function barrier: a closure over the
 # reassigned read positions would box them.)
-@inline vldU(::Val{U}, ::Val{N}, p::Ptr, i::Int) where {U,N} =
+@inline vldU(::Val{U}, ::Val{N}, p, i::Int) where {U,N} =
     ntuple(u -> vld(Val(N), p, i + (u - 1) * N), Val(U))
 
 # Software prefetch (read, high locality) of the cache line at `p`. The IR uses
@@ -49,7 +47,7 @@ use_prefetch(::Type{T}, n::Int) where {T} = n * sizeof(T) > PF_MIN_BYTES
 # `lw` upwards, the others end at the right write position `rw` (exclusive).
 # Both stores are full width; the caller guarantees the extra lanes land in free
 # slots.
-@inline function part1(x::Vec{N,T}, pv::Vec{N,T}, p::Ptr{T}, lw::Int, rw::Int) where {N,T}
+@inline function part1(x::Vec{N,T}, pv::Vec{N,T}, p::KeyRef{T}, lw::Int, rw::Int) where {N,T}
     y, c = vpartition(x, x <= pv)
     vst(y, p, lw)
     vst(y, p, rw - N)
@@ -69,14 +67,14 @@ Reorder the `n ≥ 2U*N` keys at `p` so that the first `m` are `≤ pivot` and t
 are `> pivot`. `buf` must hold at least `2U*N + N` keys. `U` vectors are processed
 per iteration. With `PF`, the keys `PFDIST` ahead of each read are prefetched.
 """
-function partition!(p::Ptr{T}, n::Int, pivot::T, buf::Ptr{T}, ::Val{U},
+function partition!(p::KeyRef{T}, n::Int, pivot::T, buf::KeyRef{T}, ::Val{U},
                     ::Val{PF}=Val(false), ::Val{BF}=Val(false)) where {T,U,PF,BF}
     N = lanes(T)
     UN = U * N
     pv = Vec{N,T}(pivot)
     # Set aside UN keys from each end; this frees UN slots at both ends.
-    unsafe_copyto!(buf, p, UN)
-    unsafe_copyto!(buf + UN * sizeof(T), p + (n - UN) * sizeof(T), UN)
+    copykeys!(buf, p, UN)
+    copykeys!(shift(buf, UN), shift(p, n - UN), UN)
     left, right = UN, n - UN    # unread keys: [left, right)
     lw, rw = 0, n               # written: [0, lw) and [rw, n)
 
@@ -95,9 +93,9 @@ function partition!(p::Ptr{T}, n::Int, pivot::T, buf::Ptr{T}, ::Val{U},
             src = right
         end
         if PF
-            pa = p + (fromleft ? left + PFDIST : right - PFDIST) * sizeof(T)
-            for c in 0:64:(UN * sizeof(T) - 1)
-                prefetch(pa + c)
+            pa = fromleft ? left + PFDIST : right - PFDIST
+            for c in 0:(64 ÷ sizeof(T)):(UN - 1)     # one prefetch per 64-byte line
+                prefetch(p, pa + c)
             end
         end
         lw, rw = part_all(vldU(Val(U), Val(N), p, src), pv, p, lw, rw)
@@ -116,7 +114,7 @@ function partition!(p::Ptr{T}, n::Int, pivot::T, buf::Ptr{T}, ::Val{U},
     # Fewer than N unread keys: append them to the buffer. Now [lw, rw) is free and
     # exactly as large as the buffer contents.
     r = right - left
-    unsafe_copyto!(buf + 2UN * sizeof(T), p + left * sizeof(T), r)
+    copykeys!(shift(buf, 2UN), shift(p, left), r)
     m = 2UN + r
     i = 0
     # While at least 2N keys remain, rw - lw ≥ 2N and the two stores are disjoint.
@@ -127,9 +125,9 @@ function partition!(p::Ptr{T}, n::Int, pivot::T, buf::Ptr{T}, ::Val{U},
     # Exact scalar placement of the last < 2N keys: each key is written to both
     # ends of the free region, and only the end it belongs to advances.
     while i < m
-        x = unsafe_load(buf, i + 1)
-        unsafe_store!(p, x, lw + 1)
-        unsafe_store!(p, x, rw)
+        x = ld(buf, i + 1)
+        st!(p, x, lw + 1)
+        st!(p, x, rw)
         c = x <= pivot
         lw += c
         rw -= !c
@@ -140,7 +138,7 @@ end
 
 # Three-way partition of one vector: keys < pivot go left, keys > pivot go right,
 # keys equal to the pivot are dropped (the caller refills them).
-@inline function part3(x::Vec{N,T}, pv::Vec{N,T}, p::Ptr{T}, lw::Int, rw::Int) where {N,T}
+@inline function part3(x::Vec{N,T}, pv::Vec{N,T}, p::KeyRef{T}, lw::Int, rw::Int) where {N,T}
     y, c = vpartition(x, x < pv)
     vst(y, p, lw)
     z, d = vpartition(x, !(x > pv))     # the keys > pivot come last
@@ -160,13 +158,13 @@ end
 Three-way version of `partition!`: afterwards the keys in `[0, a)` are below the
 pivot, those in `[b, n)` above it, and `[a, b)` holds the pivot value.
 """
-function partition3!(p::Ptr{T}, n::Int, pivot::T, buf::Ptr{T}, ::Val{U},
+function partition3!(p::KeyRef{T}, n::Int, pivot::T, buf::KeyRef{T}, ::Val{U},
                      ::Val{PF}=Val(false)) where {T,U,PF}
     N = lanes(T)
     UN = U * N
     pv = Vec{N,T}(pivot)
-    unsafe_copyto!(buf, p, UN)
-    unsafe_copyto!(buf + UN * sizeof(T), p + (n - UN) * sizeof(T), UN)
+    copykeys!(buf, p, UN)
+    copykeys!(shift(buf, UN), shift(p, n - UN), UN)
     left, right = UN, n - UN
     lw, rw = 0, n
     # Dropped keys only add free space, so the argument of `partition!` holds.
@@ -180,9 +178,9 @@ function partition3!(p::Ptr{T}, n::Int, pivot::T, buf::Ptr{T}, ::Val{U},
             src = right
         end
         if PF
-            pa = p + (fromleft ? left + PFDIST : right - PFDIST) * sizeof(T)
-            for c in 0:64:(UN * sizeof(T) - 1)
-                prefetch(pa + c)
+            pa = fromleft ? left + PFDIST : right - PFDIST
+            for c in 0:(64 ÷ sizeof(T)):(UN - 1)     # one prefetch per 64-byte line
+                prefetch(p, pa + c)
             end
         end
         lw, rw = part3_all(vldU(Val(U), Val(N), p, src), pv, p, lw, rw)
@@ -198,7 +196,7 @@ function partition3!(p::Ptr{T}, n::Int, pivot::T, buf::Ptr{T}, ::Val{U},
         lw, rw = part3(vld(Val(N), p, src), pv, p, lw, rw)
     end
     r = right - left
-    unsafe_copyto!(buf + 2UN * sizeof(T), p + left * sizeof(T), r)
+    copykeys!(shift(buf, 2UN), shift(p, left), r)
     m = 2UN + r
     i = 0
     # [lw, rw) holds at least as many slots as keys left in the buffer.
@@ -207,9 +205,9 @@ function partition3!(p::Ptr{T}, n::Int, pivot::T, buf::Ptr{T}, ::Val{U},
         i += N
     end
     while i < m
-        x = unsafe_load(buf, i + 1)
-        unsafe_store!(p, x, lw + 1)
-        unsafe_store!(p, x, rw)
+        x = ld(buf, i + 1)
+        st!(p, x, lw + 1)
+        st!(p, x, rw)
         lw += x < pivot
         rw -= x > pivot
         i += 1
@@ -220,7 +218,7 @@ function partition3!(p::Ptr{T}, n::Int, pivot::T, buf::Ptr{T}, ::Val{U},
         k += N
     end
     while k < rw
-        unsafe_store!(p, pivot, k + 1)
+        st!(p, pivot, k + 1)
         k += 1
     end
     return lw, rw
@@ -241,7 +239,7 @@ const P3TAB4 = let t = Int32[]
     t
 end
 
-@inline function part3(x::Vec{4,T}, pv::Vec{4,T}, p::Ptr{T}, lw::Int, rw::Int) where {T}
+@inline function part3(x::Vec{4,T}, pv::Vec{4,T}, p::KeyRef{T}, lw::Int, rw::Int) where {T}
     L = bitmask(x < pv) % Int
     G = bitmask(x > pv) % Int
     idx = @inbounds vload(Vec{8,Int32}, P3TAB4, 8 * (L | (G << 4)) + 1)

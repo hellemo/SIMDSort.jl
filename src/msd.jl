@@ -262,22 +262,24 @@ use_distribution(n::Int, ntasks::Int) = ntasks >= DIST_MINTASKS[] && n >= DIST_M
 # The quicksort, or above DIST_MINTASKS tasks and DIST_MINN keys the
 # sample-sort top level (which falls back to the quicksort when the sample
 # has too few distinct keys).
-function sort_auto!(p::Ptr{S}, n::Int, ntasks::Int) where {S}
-    use_distribution(n, ntasks) && @phase(:distribution, distribute_sort!(p, n, ntasks)) && return nothing
-    @phase :quicksort sort_keys!(p, n, ntasks)
+function sort_auto!(k::KeyVector, ntasks::Int)
+    n = length(k)
+    use_distribution(n, ntasks) && @phase(:distribution, distribute_sort!(k, ntasks)) && return nothing
+    owner = keyowner(k)
+    GC.@preserve owner @phase :quicksort sort_keys!(keyref(k), n, ntasks)
     return nothing
 end
 
 """
-    distribute_sort!(p::Ptr{S}, n, ntasks) -> Bool
+    distribute_sort!(k, ntasks) -> Bool
 
-Sort the n keys at `p` with one sample-sort distribution pass and per-bucket
+Sort the keys `k` with one sample-sort distribution pass and per-bucket
 quicksorts. Returns `false` without changing anything if the sample has too
 few distinct keys for balanced buckets.
 """
-function distribute_sort!(p::Ptr{S}, n::Int, ntasks::Int) where {S}
+function distribute_sort!(k::KeyVector{S}, ntasks::Int) where {S}
     nb = DIST_BUCKETS
-    k = unsafe_wrap(Array, p, n)
+    n = length(k)
     spl = sample_splitters(identity, k, nb)
     spl === nothing && return false
     count!(:dist_sorts)
@@ -299,12 +301,12 @@ function distribute_sort!(p::Ptr{S}, n::Int, ntasks::Int) where {S}
     end
 end
 
-function dist_finish!(k::Vector{S}, tv::Vector{S}, bstart, bs) where {S}
-    GC.@preserve k tv for b in bs
+function dist_finish!(k::KeyVector{S}, tv::Vector{S}, bstart, bs) where {S}
+    GC.@preserve tv for b in bs
         a, m = bstart[b], bstart[b+1] - bstart[b]
         m == 0 && continue
-        sort_keys!(pointer(tv, a), m, 1)
-        unsafe_copyto!(pointer(k, a), pointer(tv, a), m)
+        sort_keys!(shift(keyref(tv), a - 1), m, 1)
+        copyto!(k, a, tv, a, m)
     end
     return nothing
 end

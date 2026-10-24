@@ -398,38 +398,38 @@ register by register. `R` must be a power-of-two multiple of `N`.
 end
 
 # Copy `n ≤ R*N` keys at `p` to `buf`, pad with typemax, sort, and copy back.
-@inline function netsort!(p::Ptr{T}, n::Int, buf::Ptr{T}, ::Val{R}, ::Val{N}) where {T,R,N}
+@inline function netsort!(p::KeyRef{T}, n::Int, buf::KeyRef{T}, ::Val{R}, ::Val{N}) where {T,R,N}
     W = R * N
-    unsafe_copyto!(buf, p, n)
+    copykeys!(buf, p, n)
     for i in n+1:W
-        unsafe_store!(buf, typemax(T), i)
+        st!(buf, typemax(T), i)
     end
-    vs = ntuple(r -> vload(Vec{N,T}, buf + (r - 1) * N * sizeof(T)), Val(R))
+    vs = ntuple(r -> vld(Val(N), buf, (r - 1) * N), Val(R))
     vs = sortnet(vs)
     nfull = n ÷ N
     # Whole output vectors go straight back; the partial one through the buffer.
     for r in 1:R
         if r <= nfull
-            vstore(vs[r], p + (r - 1) * N * sizeof(T))
+            vst(vs[r], p, (r - 1) * N)
         elseif r == nfull + 1
-            vstore(vs[r], buf)
+            vst(vs[r], buf, 0)
         end
     end
-    unsafe_copyto!(p + nfull * N * sizeof(T), buf, n - nfull * N)
+    copykeys!(shift(p, nfull * N), buf, n - nfull * N)
     return nothing
 end
 
-@inline function insertion_sort!(p::Ptr{T}, n::Int) where {T}
+@inline function insertion_sort!(p::KeyRef{T}, n::Int) where {T}
     for i in 2:n
-        x = unsafe_load(p, i)
+        x = ld(p, i)
         j = i - 1
         while j >= 1
-            y = unsafe_load(p, j)
+            y = ld(p, j)
             y <= x && break
-            unsafe_store!(p, y, j + 1)
+            st!(p, y, j + 1)
             j -= 1
         end
-        unsafe_store!(p, x, j + 1)
+        st!(p, x, j + 1)
     end
     return nothing
 end
@@ -446,7 +446,7 @@ basecase_max(::Type{T}) where {T} = MAXROWS * lanes(T)
 Sort `n ≤ basecase_max(T)` keys at `p`, using `buf` (at least that many keys) as
 scratch. The smallest network with R ∈ {N, 2N, 4N} rows that fits is used.
 """
-@inline function small_sort!(p::Ptr{T}, n::Int, buf::Ptr{T}) where {T}
+@inline function small_sort!(p::KeyRef{T}, n::Int, buf::KeyRef{T}) where {T}
     N = lanes(T)
     if n <= 8
         insertion_sort!(p, n)

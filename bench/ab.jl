@@ -10,7 +10,8 @@
 #
 # Env: SIZE_LOG (2^k keys for the primitive cases, default 24), NT (threads
 # for the parallel cases, default all), OUT (if set, writes $OUT/ab.csv),
-# AB_ONLY (run only the cases whose name contains this string).
+# AB_ONLY (run only the cases whose name contains this string), AB_NEW_EDIT
+# (one constant of the working tree changed, see below).
 
 using SIMD, Random, Statistics, Printf
 
@@ -25,7 +26,17 @@ const L = parse(Int, get(ENV, "SIZE_LOG", "24"))
 const NT = parse(Int, get(ENV, "NT", string(Threads.nthreads())))
 
 const BASE = load_variant(BASE_SRC, "SIMDSort_base")
-const NEW = load_variant(NEW_SRC, "SIMDSort_new")
+# AB_NEW_EDIT="file.jl:NAME=value" changes one constant of the working tree
+# (e.g. "keyref.jl:SAFE_KEYS=false").
+const NEW_EDIT = get(ENV, "AB_NEW_EDIT", "")
+const NEW = if isempty(NEW_EDIT)
+    load_variant(NEW_SRC, "SIMDSort_new")
+else
+    let (file, rest) = split(NEW_EDIT, ":"; limit = 2), (name, value) = split(rest, "="; limit = 2)
+        println("working tree with ", file, ": const ", name, " = ", value)
+        load_variant(NEW_SRC, "SIMDSort_new"; file, name, value)
+    end
+end
 
 rng = Xoshiro(2024)
 randstr(n) = String(rand(rng, UInt8[0x30:0x39; 0x41:0x5a; 0x61:0x7a], n))

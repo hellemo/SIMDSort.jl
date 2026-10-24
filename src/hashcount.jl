@@ -80,7 +80,7 @@ Sort `v` by counting its distinct values in a hash table if a sample suggests
 there are few of them (at most `HASH_MAXK`); return `false`, leaving `v`
 unchanged, otherwise.
 """
-function hash_count_sort!(v::Vector{T}, o::Ord, ntasks::Int) where {T<:SortTypes}
+function hash_count_sort!(v::AbstractVector{T}, o::Ord, ntasks::Int) where {T<:SortTypes}
     n = length(v)
     n < HASH_MINN && return false
     U = unsigned(signedkey(T))

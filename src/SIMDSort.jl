@@ -33,6 +33,7 @@ include("instrument.jl")
 include("scratchmem.jl")
 include("tasks.jl")
 include("keys.jl")
+include("keyref.jl")
 include("network.jl")
 include("partition.jl")
 include("sort.jl")
@@ -84,13 +85,9 @@ function sort_primitive!(::MappedKeys, v::Vector{T}, o::Ord, nt::Int) where {T}
     # Check for sorted input before the key map, which preserves the order.
     @phase(:presorted_check, presorted!(v, o, nt)) && return v
     @phase(:hash_check, hash_count_sort!(v, o, nt)) && return v
-    n = length(v)
-    S = signedkey(T)
-    GC.@preserve v begin
-        p = Ptr{S}(pointer(v))
-        k = unsafe_wrap(Array, p, n)
+    as_keys(v, signedkey(T)) do k
         @phase :keymap foreach_chunk(c -> map_keys!(c, T, o), k, nt)
-        sort_auto!(p, n, nt)
+        sort_auto!(k, nt)
         @phase :keyunmap foreach_chunk(c -> unmap_keys!(c, T, o), k, nt)
     end
     return v
@@ -104,8 +101,7 @@ function sort_primitive!(::NativeKeys, v::Vector{T}, o::Ord, nt::Int) where {T}
     @phase(:counting_check, counting_sort!(v, o, nt)) && return v
     @phase(:hash_check, hash_count_sort!(v, o, nt)) && return v
     isrev(o) && foreach_chunk(c -> mapkeys!(~, c), v, nt)
-    GC.@preserve v (@phase(:presorted_check, presorted!(v, Base.Order.Forward, nt)) ||
-                    sort_auto!(pointer(v), length(v), nt))
+    @phase(:presorted_check, presorted!(v, Base.Order.Forward, nt)) || sort_auto!(v, nt)
     isrev(o) && foreach_chunk(c -> mapkeys!(~, c), v, nt)
     return v
 end
@@ -115,19 +111,15 @@ end
 # zeros is rewritten in `isless` order afterwards from a count of the -0.0s.
 function sort_primitive!(::FloatKeys, v::Vector{T}, o::Ord, nt::Int) where {T}
     nnan, nneg, npos = @phase :float_scan float_scan(v, nt)
-    r = nnan == 0 ? eachindex(v) : @phase(:nan_partition, nan_partition!(v, o))
-    n = length(r)
-    n <= 1 && return v
-    GC.@preserve v begin
-        p = pointer(v, first(r))
-        k = unsafe_wrap(Array, p, n)
-        @phase(:hash_check, hash_count_sort!(k, o, nt)) && return v
-        isrev(o) && foreach_chunk(c -> mapkeys!(-, c), k, nt)
-        @phase(:presorted_check, presorted!(k, Base.Order.Forward, nt)) || sort_auto!(p, n, nt)
-        # After negation (Reverse) the +0.0s of the input are the -0.0s.
-        @phase :order_zeros order_zeros!(k, isrev(o) ? npos : nneg)
-        isrev(o) && foreach_chunk(c -> mapkeys!(-, c), k, nt)
-    end
+    r = nnan == 0 ? (1:length(v)) : @phase(:nan_partition, nan_partition!(v, o))
+    length(r) <= 1 && return v
+    k = view(v, r)              # the values without NaNs
+    @phase(:hash_check, hash_count_sort!(k, o, nt)) && return v
+    isrev(o) && foreach_chunk(c -> mapkeys!(-, c), k, nt)
+    @phase(:presorted_check, presorted!(k, Base.Order.Forward, nt)) || sort_auto!(k, nt)
+    # After negation (Reverse) the +0.0s of the input are the -0.0s.
+    @phase :order_zeros order_zeros!(k, isrev(o) ? npos : nneg)
+    isrev(o) && foreach_chunk(c -> mapkeys!(-, c), k, nt)
     return v
 end
 

@@ -16,7 +16,7 @@ end
 
 @inline med3(a, b, c) = vmax(vmin(a, b), vmin(vmax(a, b), c))
 
-@inline function sample(p::Ptr{T}, n::Int, s::UInt64) where {T}
+@inline function sample(p::KeyRef{T}, n::Int, s::UInt64) where {T}
     N = lanes(T)
     s = xorshift(s)
     # Offset in [0, n - N] by multiply-high instead of a division.
@@ -32,7 +32,7 @@ offsets. `dup` is set when at least N of the 9N sampled keys equal the pivot,
 which suggests a large block of equal keys. Needs `n ≥ N`; `s` is the generator
 state.
 """
-function choose_pivot(p::Ptr{T}, n::Int, s::UInt64) where {T}
+function choose_pivot(p::KeyRef{T}, n::Int, s::UInt64) where {T}
     N = lanes(T)
     a1, s = sample(p, n, s); a2, s = sample(p, n, s); a3, s = sample(p, n, s)
     a4, s = sample(p, n, s); a5, s = sample(p, n, s); a6, s = sample(p, n, s)
@@ -59,7 +59,7 @@ loaded as vectors from pseudo-random offsets, sorted with the base-case network
 in `buf`. `dup` is set when at least 1/9 of the sample equals the pivot.
 Otherwise as `choose_pivot(p, n, s)`.
 """
-function choose_pivot(p::Ptr{T}, n::Int, s::UInt64, buf::Ptr{T}) where {T}
+function choose_pivot(p::KeyRef{T}, n::Int, s::UInt64, buf::KeyRef{T}) where {T}
     n > BIGPIVOT_MINN || return choose_pivot(p, n, s)
     N = lanes(T)
     m = basecase_max(T)
@@ -69,13 +69,13 @@ function choose_pivot(p::Ptr{T}, n::Int, s::UInt64, buf::Ptr{T}) where {T}
     end
     small_sort!(buf, m, buf)
     h = m ÷ 2
-    pivot = unsafe_load(buf, h + 1)
+    pivot = ld(buf, h + 1)
     lo = h
-    while lo > 0 && unsafe_load(buf, lo) == pivot
+    while lo > 0 && ld(buf, lo) == pivot
         lo -= 1
     end
     hi = h + 1
-    while hi < m && unsafe_load(buf, hi + 1) == pivot
+    while hi < m && ld(buf, hi + 1) == pivot
         hi += 1
     end
     return pivot, 9 * (hi - lo) >= m, s
@@ -97,7 +97,7 @@ end
     return t[(N + 1) ÷ 2]
 end
 
-function vextrema(p::Ptr{T}, n::Int) where {T}
+function vextrema(p::KeyRef{T}, n::Int) where {T}
     N = lanes(T)
     lo = hi = vld(Val(N), p, 0)
     i = N
@@ -111,11 +111,11 @@ function vextrema(p::Ptr{T}, n::Int) where {T}
     return minimum(min(lo, x)), maximum(max(hi, x))
 end
 
-@inline partition_auto!(p::Ptr{T}, n::Int, pivot::T, buf::Ptr{T}) where {T} =
+@inline partition_auto!(p::KeyRef{T}, n::Int, pivot::T, buf::KeyRef{T}) where {T} =
     use_prefetch(T, n) ? partition!(p, n, pivot, buf, Val(UNROLL), Val(true)) :
                          partition!(p, n, pivot, buf, Val(UNROLL))
 
-@inline partition3_auto!(p::Ptr{T}, n::Int, pivot::T, buf::Ptr{T}) where {T} =
+@inline partition3_auto!(p::KeyRef{T}, n::Int, pivot::T, buf::KeyRef{T}) where {T} =
     use_prefetch(T, n) ? partition3!(p, n, pivot, buf, Val(UNROLL), Val(true)) :
                          partition3!(p, n, pivot, buf, Val(UNROLL))
 
@@ -128,7 +128,7 @@ pivot (or equal to it if `a == b`), those in `[b, n)` above it, and those in
 many keys equal to the pivot), one three-way pass splits off the equal block;
 otherwise `partition(p, n, pivot)` makes a two-way split and `a == b`.
 """
-@inline function split!(p::Ptr{T}, n::Int, pivot::T, dup::Bool, buf::Ptr{T},
+@inline function split!(p::KeyRef{T}, n::Int, pivot::T, dup::Bool, buf::KeyRef{T},
                         partition::F) where {F,T}
     dup && return partition3_auto!(p, n, pivot, buf)
     m = partition(p, n, pivot)
@@ -143,12 +143,12 @@ past `depth` levels the range is handed to `Base.sort!`. The bounds narrow with
 every partition and let 64-bit integer base cases use double min/max
 (`leaf_sort!`).
 """
-function qsort!(p::Ptr{T}, n::Int, buf::Ptr{T}, depth::Int, s::UInt64,
+function qsort!(p::KeyRef{T}, n::Int, buf::KeyRef{T}, depth::Int, s::UInt64,
                 lo::T=typemin(T), hi::T=typemax(T)) where {T}
     while n > basecase_max(T)
         if depth == 0
             count!(:depth_limit_fallbacks)
-            sort!(unsafe_wrap(Array, p, n))
+            sort!(keyarray(p, n))
             return s
         end
         depth -= 1
@@ -161,7 +161,7 @@ function qsort!(p::Ptr{T}, n::Int, buf::Ptr{T}, depth::Int, s::UInt64,
             mn, mx = vextrema(p, n)
             mn == mx && (count!(:equal_ranges); return s)
             m = partition_auto!(p, n, mn, buf)
-            p += m * sizeof(T)
+            p = shift(p, m)
             n -= m
             lo, hi = mn, mx
             continue
@@ -170,11 +170,11 @@ function qsort!(p::Ptr{T}, n::Int, buf::Ptr{T}, depth::Int, s::UInt64,
         # are ≤ pivot, keys from b on are ≥ pivot.
         if a <= n - b
             s = qsort!(p, a, buf, depth, s, lo, pivot)
-            p += b * sizeof(T)
+            p = shift(p, b)
             n -= b
             lo = pivot
         else
-            s = qsort!(p + b * sizeof(T), n - b, buf, depth, s, pivot, hi)
+            s = qsort!(shift(p, b), n - b, buf, depth, s, pivot, hi)
             n = a
             hi = pivot
         end
@@ -184,7 +184,7 @@ function qsort!(p::Ptr{T}, n::Int, buf::Ptr{T}, depth::Int, s::UInt64,
     return s
 end
 
-@inline leaf_sort!(p::Ptr{T}, n::Int, buf::Ptr{T}, lo::T, hi::T) where {T} = small_sort!(p, n, buf)
+@inline leaf_sort!(p::KeyRef{T}, n::Int, buf::KeyRef{T}, lo::T, hi::T) where {T} = small_sort!(p, n, buf)
 
 # [F5 §III-C] AVX2 has no 64-bit integer min/max (a compare and two blends), but it has
 # vminpd/vmaxpd. If the keys of a leaf lie within [lo, hi] with hi - lo < 2^62,
@@ -208,7 +208,7 @@ has_avx512() = target() isa AVX512Target
 double_leaves(::AVXTarget) = true
 double_leaves(_) = false
 
-@inline function leaf_sort!(p::Ptr{Int64}, n::Int, buf::Ptr{Int64}, lo::Int64, hi::Int64)
+@inline function leaf_sort!(p::KeyRef{Int64}, n::Int, buf::KeyRef{Int64}, lo::Int64, hi::Int64)
     if double_leaves(target()) && n > 8 && (hi - lo) % UInt64 < UInt64(1) << 62 &&
             !get_zero_subnormals()
         small_sort_offsets!(p, n, buf, lo)
@@ -218,7 +218,7 @@ double_leaves(_) = false
     return nothing
 end
 
-@inline function small_sort_offsets!(p::Ptr{Int64}, n::Int, buf::Ptr{Int64}, lo::Int64)
+@inline function small_sort_offsets!(p::KeyRef{Int64}, n::Int, buf::KeyRef{Int64}, lo::Int64)
     N = lanes(Int64)
     R = MAXROWS
     if n <= N * N
@@ -233,32 +233,32 @@ end
     return nothing
 end
 
-@inline function netsort_offsets!(p::Ptr{Int64}, n::Int, buf::Ptr{Int64}, lo::Int64,
+@inline function netsort_offsets!(p::KeyRef{Int64}, n::Int, buf::KeyRef{Int64}, lo::Int64,
                                   ::Val{R}) where {R}
     N = lanes(Int64)
-    unsafe_copyto!(buf, p, n)
+    copykeys!(buf, p, n)
     # Padding: lo + (bits of +Inf), so that its offset is +Inf.
     pad = lo + reinterpret(Int64, Inf)
     for i in n+1:R*N
-        unsafe_store!(buf, pad, i)
+        st!(buf, pad, i)
     end
     lv = Vec{N,Int64}(lo)
-    vs = ntuple(r -> reinterpret(Vec{N,Float64}, vload(Vec{N,Int64}, buf + (r - 1) * N * 8) - lv), Val(R))
+    vs = ntuple(r -> reinterpret(Vec{N,Float64}, vld(Val(N), buf, (r - 1) * N) - lv), Val(R))
     vs = sortnet(vs)
     nfull = n ÷ N
     for r in 1:R
         x = reinterpret(Vec{N,Int64}, vs[r]) + lv
         if r <= nfull
-            vstore(x, p + (r - 1) * N * 8)
+            vst(x, p, (r - 1) * N)
         elseif r == nfull + 1
-            vstore(x, buf)
+            vst(x, buf, 0)
         end
     end
-    unsafe_copyto!(p + nfull * N * 8, buf, n - nfull * N)
+    copykeys!(shift(p, nfull * N), buf, n - nfull * N)
     return nothing
 end
 
-function sort_keys!(p::Ptr{T}, n::Int, ntasks::Int=1) where {T}
+function sort_keys!(p::KeyRef{T}, n::Int, ntasks::Int=1) where {T}
     n <= 1 && return nothing
     depth = 2 * (8 * sizeof(Int) - leading_zeros(n)) + 4
     s = 0x9e3779b97f4a7c15 ⊻ UInt64(n)
@@ -266,7 +266,7 @@ function sort_keys!(p::Ptr{T}, n::Int, ntasks::Int=1) where {T}
         pqsort!(p, n, depth, s, ntasks, n)
     else
         buf = scratch(T)
-        GC.@preserve buf qsort!(p, n, pointer(buf), depth, s)
+        GC.@preserve buf qsort!(p, n, scratchref(p, buf), depth, s)
     end
     return nothing
 end
@@ -356,7 +356,7 @@ function counting_sort!(v::Vector{T}, o::Ord, ntasks::Int) where {T<:Integer}
     counts = count_all(v, T(lo), Int(hi - lo + 1), ntasks)
     if counts[end] != 0
         # Keys outside the table: count again over the exact range.
-        mn, mx = GC.@preserve v vextrema(pointer(v), n)
+        mn, mx = GC.@preserve v vextrema(keyref(v), n)
         r = Int128(mx) - Int128(mn)
         (r <= COUNT_MAXRANGE && r < n ÷ 4) || return false
         lo = Int128(mn)
