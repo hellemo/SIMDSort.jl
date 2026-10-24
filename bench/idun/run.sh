@@ -39,6 +39,7 @@ echo "julia: $(command -v julia || echo 'NOT FOUND'), depot: $JULIA_DEPOT_PATH, 
 QUICK=${QUICK:-0}
 if [ "$QUICK" = 1 ]; then R1=3; R2=1; XMAX=26; else R1=${ROUNDS:-9}; R2=${ROUNDS:-3}; XMAX=28; fi
 JL="julia --startup-file=no"
+ENVDIR=bench/idun          # lean environment: no plotting packages
 STEPS=("$@")
 [ ${#STEPS[@]} -eq 0 ] && STEPS=(env setup test build codegen avx512 instrument profile scaling tune bench types crossover)
 
@@ -57,21 +58,21 @@ step_env() {
 step_setup() {
     $JL --version
     # stdin from /dev/null: a credentials prompt fails at once instead of hanging.
-    $JL --project=bench -e 'using Pkg; println("depot: ", DEPOT_PATH[1]);
+    $JL --project=$ENVDIR -e 'using Pkg; println("depot: ", DEPOT_PATH[1]);
         println("registries: ", join([r.name for r in Pkg.Registry.reachable_registries()], ", "));
         Pkg.instantiate(); Pkg.precompile()' < /dev/null
 }
 step_test()  { $JL --project=. -e 'using Pkg; Pkg.test()'; }
 step_build() { ../ChapelSort.jl/bench/simd/build.sh; }
-step_codegen()    { $JL --project=bench $HERE/codegen.jl; }
-step_avx512()     { $JL -t $NT --project=bench bench/avx512.jl all; }
-step_instrument() { $JL -t $NT --project=bench $HERE/instrument.jl; }
-step_profile()    { $JL --project=bench bench/profile.jl; }
-step_scaling()    { $JL -t $NT --project=bench $HERE/scaling.jl; }
-step_tune()       { $JL -t $NT --project=bench $HERE/tune.jl; }
-step_bench()      { $JL -t $NT --project=bench bench/bench.jl $R1; }
-step_types()      { $JL -t $NT --project=bench bench/types.jl $R2; }
-step_crossover()  { $JL -t $NT --project=bench bench/crossover.jl 3 $XMAX; }
+step_codegen()    { $JL --project=$ENVDIR $HERE/codegen.jl; }
+step_avx512()     { $JL -t $NT --project=$ENVDIR bench/avx512.jl all; }
+step_instrument() { $JL -t $NT --project=$ENVDIR $HERE/instrument.jl; }
+step_profile()    { $JL --project=$ENVDIR bench/profile.jl; }
+step_scaling()    { $JL -t $NT --project=$ENVDIR $HERE/scaling.jl; }
+step_tune()       { $JL -t $NT --project=$ENVDIR $HERE/tune.jl; }
+step_bench()      { $JL -t $NT --project=$ENVDIR bench/bench.jl $R1; }
+step_types()      { $JL -t $NT --project=$ENVDIR bench/types.jl $R2; }
+step_crossover()  { $JL -t $NT --project=$ENVDIR bench/crossover.jl 3 $XMAX; }
 
 printf "step\tstatus\tseconds\n" >> "$OUT/steps.tsv"
 for s in "${STEPS[@]}"; do

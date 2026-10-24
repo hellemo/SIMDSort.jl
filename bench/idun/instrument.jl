@@ -3,7 +3,7 @@
 # $OUT/instrument.txt (readable reports) and $OUT/instrument.csv (one row per
 # case, thread count and phase or counter).
 #
-#   OUT=dir julia -t <n> --project=bench bench/idun/instrument.jl
+#   OUT=dir julia -t <n> --project=bench/idun bench/idun/instrument.jl
 #
 # Each case: a warm-up, the best of 3 plain runs ("wall_plain") and the best of
 # 3 instrumented runs; the report is from the fastest instrumented run, so the

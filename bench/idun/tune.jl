@@ -5,7 +5,7 @@
 # median time per case and variant, and prints each variant relative to the
 # baseline (the committed values).
 #
-#   OUT=dir julia -t <n> --project=bench bench/idun/tune.jl [rounds]
+#   OUT=dir julia -t <n> --project=bench/idun bench/idun/tune.jl [rounds]
 
 using SIMD, Random, Statistics, Printf
 

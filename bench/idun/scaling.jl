@@ -2,7 +2,7 @@
 # case, method and thread count (1, 2, 4, ... and all threads), fresh input per
 # round, methods interleaved in random order. Writes $OUT/scaling.csv.
 #
-#   OUT=dir julia -t <n> --project=bench bench/idun/scaling.jl [rounds]
+#   OUT=dir julia -t <n> --project=bench/idun bench/idun/scaling.jl [rounds]
 #
 # "SIMDSort dist" is the sample-sort top level for 64-bit keys
 # (src/msd.jl), disabled by default because it loses on the 8-thread

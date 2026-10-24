@@ -4,7 +4,7 @@
 # decisions in docs/AVX512.md hold, e.g. native vpminsq/vpmaxsq in the Int64
 # networks, the size of the 32-row networks, and spills (stack traffic).
 #
-#   OUT=dir julia --project=bench bench/idun/codegen.jl
+#   OUT=dir julia --project=bench/idun bench/idun/codegen.jl
 
 using SIMDSort, SIMD, InteractiveUtils, Printf
 const Q = SIMDSort

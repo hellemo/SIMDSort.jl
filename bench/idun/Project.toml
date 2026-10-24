@@ -1,0 +1,24 @@
+# Lean environment for the Idun run (bench/idun/run.sh): everything the
+# measurement scripts need, but no plotting or table packages (CairoMakie has
+# been troublesome on Idun). Tables and charts are made locally from the
+# fetched CSV files with the bench/ environment.
+[deps]
+BitIntegers = "c3b6d118-76ef-56ca-8cc7-ebb389d030a1"
+ChapelSort = "b557a38e-b6f0-494b-a80d-8b33d309e162"
+Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
+DoubleFloats = "497a8b3b-efae-58df-a0af-a86822472b78"
+InteractiveUtils = "b77e0a4c-d291-57a0-90e8-8db25a27a240"
+Libdl = "8f399da3-3557-5675-b5ff-fb832c97cbdb"
+MultiFloats = "bdf0d083-296b-4888-a5b6-7498122e68a5"
+Printf = "de0858da-6303-5e67-8744-51eddeeeb8d7"
+Profile = "9abbd945-dff8-562f-b5e8-e1ebf5ef1b79"
+Quadmath = "be4d8f0f-7fa4-5f49-b795-2f01399ab2dd"
+Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
+SIMD = "fdea26ae-647d-5447-a871-4b548cad5224"
+SIMDSort = "0db4c8ee-f0ef-4abc-a572-3607934b7ab8"
+Statistics = "10745b16-79ce-11e8-11f9-7d13ad32a3b2"
+
+[sources]
+ChapelSort = {path = "../../../ChapelSort.jl"}
+SIMD = {path = "../../../SIMD.jl"}
+SIMDSort = {path = "../.."}

@@ -6,7 +6,8 @@
 #    AVX-512) against a Bramas-style step with native compress (vcompress for
 #    the low part, vstorec, i.e. vpcompress to memory, for the high part).
 # 2. net:  the 32-row base-case network as one network (AVX-512 default: 32
-#    registers) against the two-halves version used on AVX2.
+#    registers) against the two-halves version used on AVX2 (ns per call,
+#    including the loads and stores of the register matrix).
 # 3. sort: full sorts against x86-simd-sort and Highway vqsort (rebuild the shim
 #    on the node: ChapelSort.jl/bench/simd/build.sh uses -march=native).
 
@@ -36,31 +37,33 @@ Q.eval(quote
     end
 end)
 
+# One pass of the kernel over n keys from p into q (type-stable, f static).
+Q.eval(quote
+    function part_loop!(f::F, p::Ptr{T}, q::Ptr{T}, n::Int, ::Val{N}) where {F,T,N}
+        pv = Vec{N,T}(zero(T)); lw, rw = 0, n + 2N
+        for i in 0:N:n-N
+            lw, rw = f(vld(Val(N), p, i), pv, q, lw, rw)
+        end
+        return lw
+    end
+end)
+
+# ns/key of the partition step alone (out of place, so the input is unchanged
+# between repetitions; random keys, pivot 0, i.e. unpredictable sides).
 function part_cost(::Type{T}, n, kernel) where {T}
     N = Q.lanes(T)
-    a = rand(T, n); b = similar(a)
+    a = T <: AbstractFloat ? T.(randn(n)) : rand(T, n)
+    tmp = Vector{T}(undef, n + 2N)
     reps = max(1, 2^24 ÷ n)
     f = kernel === :compress ? Q.part1_compress : Q.part1
-    best = Inf
-    for _ in 1:5
-        t = 0.0
-        for _ in 1:reps
-            copyto!(b, a)
-            t += @elapsed GC.@preserve b begin
-                p = pointer(b); pv = Vec{N,T}(zero(T)); lw, rw = 0, n
-                # Out-of-place style loop over all vectors: isolates the kernel.
-                tmp = Vector{T}(undef, n + 2N)
-                GC.@preserve tmp begin
-                    q = pointer(tmp); lw, rw = 0, n + 2N
-                    for i in 0:N:n-N
-                        lw, rw = f(Q.vld(Val(N), p, i), pv, q, lw, rw)
-                    end
-                end
-            end
+    run() = GC.@preserve a tmp Base.invokelatest(Q.part_loop!, f, pointer(a), pointer(tmp), n, Val(N))
+    run()
+    best = minimum(1:5) do _
+        @elapsed for _ in 1:reps
+            run()
         end
-        best = min(best, t / reps)
     end
-    return best / n * 1e9
+    return best / reps / n * 1e9
 end
 
 if what in ("part", "all")
@@ -76,24 +79,33 @@ end
 
 # --- 2. base-case network ------------------------------------------------------
 
+# The two variants of the 32-row network: one network (zigzag merges, what
+# sortnet uses without the split) and two 16-row halves plus a merge.
 Q.eval(quote
     @generated net_single(vs::NTuple{R,Vec{N,T}}) where {R,N,T} =
-        Expr(:block, Expr(:meta, :inline), network_body(R, N))
+        Expr(:block, Expr(:meta, :inline), zigzag_body(R, N))
     @generated net_halves(vs::NTuple{R,Vec{N,T}}) where {R,N,T} =
         Expr(:block, Expr(:meta, :inline), halves_body(R, N))
+    # Load, sort, store M register matrices; type-stable (R, N static).
+    function net_loop!(f::F, p::Ptr{T}, M::Int, ::Val{R}, ::Val{N}) where {F,T,R,N}
+        for j in 0:M-1
+            q = p + j * R * N * sizeof(T)
+            vs = ntuple(r -> vload(Vec{N,T}, q + (r - 1) * N * sizeof(T)), Val(R))
+            out = f(vs)
+            for r in 1:R
+                vstore(out[r], q + (r - 1) * N * sizeof(T))
+            end
+        end
+    end
 end)
 
 function net_cost(::Type{T}, f) where {T}
     N = Q.lanes(T); R = 32; M = 4096
     a = T <: AbstractFloat ? T.(randn(R * N * M)) : rand(T, R * N * M)
-    g(a) = GC.@preserve a for j in 0:M-1
-        p = pointer(a) + j * R * N * sizeof(T)
-        vs = ntuple(r -> vload(Vec{N,T}, p + (r - 1) * N * sizeof(T)), Val(R))
-        out = Base.invokelatest(f, vs)
-        for r in 1:R; vstore(out[r], p + (r - 1) * N * sizeof(T)); end
-    end
-    g(copy(a))
-    return minimum(_ -> (b = copy(a); @elapsed g(b)), 1:5) / M * 1e9
+    run(b) = GC.@preserve b Base.invokelatest(Q.net_loop!, f, pointer(b), M, Val(R), Val(N))
+    run(copy(a))
+    # Fresh (unsorted) input every round: a sorted matrix would be cheaper.
+    return minimum(_ -> (b = copy(a); @elapsed run(b)), 1:7) / M * 1e9
 end
 
 if what in ("net", "all")
@@ -104,6 +116,10 @@ if what in ("net", "all")
 end
 
 # --- 3. full sorts --------------------------------------------------------------
+
+# (Functions, so that the ccall argument types are static.)
+xss_call(f, v::Vector{T}, nt) where {T} = ccall(f, Cvoid, (Ptr{T}, Csize_t, Cint), v, length(v), nt)
+vq_call(f, v::Vector{T}) where {T} = ccall(f, Cvoid, (Ptr{T}, Csize_t), v, length(v))
 
 if what in ("sort", "all")
     lib = get(ENV, "SIMDSORT_LIB", joinpath(@__DIR__, "..", "..", "ChapelSort.jl", "bench", "simd", "libsimdsort.so"))
@@ -118,9 +134,9 @@ if what in ("sort", "all")
         fs = Pair{String,Function}["SIMDSort 1" => v -> simdsort!(v), "SIMDSort $nt" => v -> simdsort!(v; ntasks = nt)]
         if have
             xs = dlsym(L, Symbol("xss_sort_", sfx[T])); vq = dlsym(L, Symbol("vqsort_", sfx[T]))
-            push!(fs, "x86-simd-sort 1" => v -> ccall(xs, Cvoid, (Ptr{T}, Csize_t, Cint), v, length(v), 1),
-                      "x86-simd-sort $nt" => v -> ccall(xs, Cvoid, (Ptr{T}, Csize_t, Cint), v, length(v), nt),
-                      "vqsort 1" => v -> ccall(vq, Cvoid, (Ptr{T}, Csize_t), v, length(v)))
+            push!(fs, "x86-simd-sort 1" => v -> xss_call(xs, v, 1),
+                      "x86-simd-sort $nt" => v -> xss_call(xs, v, nt),
+                      "vqsort 1" => v -> vq_call(vq, v))
         end
         rng = Xoshiro(1); n = 2^26
         gen() = T <: AbstractFloat ? T.(randn(rng, n)) : rand(rng, T, n)
