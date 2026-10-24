@@ -89,15 +89,11 @@ function hash_count_sort!(v::Vector{T}, rev::Bool, ntasks::Int) where {T<:SortTy
     est > HASH_MAXK && return false
     count!(:hash_attempts)
     cap = max(1 << 10, nextpow(2, ceil(Int, 4 * est)))
-    chunks = collect(Iterators.partition(1:n, cld(n, max(1, ntasks))))
-    tables = [CountTable{U}(cap) for _ in chunks]
-    ok = Vector{Bool}(undef, length(chunks))
-    if length(chunks) == 1
-        ok[1] = count_into!(tables[1], k, chunks[1])
-    else
-        @sync for (i, c) in enumerate(chunks)
-            Threads.@spawn ok[i] = count_into!(tables[i], k, c)
-        end
+    cs = chunks(n, ntasks)
+    tables = [CountTable{U}(cap) for _ in cs]
+    ok = Vector{Bool}(undef, length(cs))
+    tforeach_index(length(cs)) do i
+        ok[i] = count_into!(tables[i], k, cs[i])
     end
     all(ok) || (count!(:hash_aborts); return false)
     # Merge the tables (few entries each).
@@ -116,7 +112,7 @@ function hash_count_sort!(v::Vector{T}, rev::Bool, ntasks::Int) where {T<:SortTy
     count!(:hash_sorts)
     count!(:hash_distinct_keys, length(svals))
     starts = cumsum([1; scnts[1:end-1]])
-    foreach_range(n, ntasks) do r
+    tforeach(n, ntasks) do r
         j = searchsortedlast(starts, first(r))
         i = first(r)
         @inbounds while i <= last(r)

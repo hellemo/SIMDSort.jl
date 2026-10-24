@@ -292,19 +292,15 @@ const PRESORTED_PAR_MIN = 1 << 20
 # first key out of order, so random input still costs almost nothing).
 function psorted(k::AbstractVector, rev::Bool, ntasks::Int)
     n = length(k)
-    chunks = collect(Iterators.partition(1:n, cld(n, ntasks)))
-    res = Vector{Bool}(undef, length(chunks))
-    @sync for (i, c) in enumerate(chunks)
-        Threads.@spawn res[i] = issorted(view(k, first(c):min(last(c) + 1, n)); rev)
+    return tmapreduce(&, n, ntasks; minlen = 0) do r
+        issorted(view(k, first(r):min(last(r) + 1, n)); rev)
     end
-    return all(res)
 end
 
 function preverse!(k::AbstractVector, ntasks::Int)
     n = length(k)
-    h = n ÷ 2
-    @sync for c in Iterators.partition(1:h, cld(h, ntasks))
-        Threads.@spawn @inbounds for i in c
+    tforeach(n ÷ 2, ntasks; minlen = 0) do r
+        @inbounds for i in r
             k[i], k[n+1-i] = k[n+1-i], k[i]
         end
     end
@@ -364,13 +360,7 @@ end
 # Counts per slot of [base, base + W) plus one overflow slot, by up to `ntasks`
 # tasks.
 function count_all(v::Vector{T}, base::T, W::Int, ntasks::Int) where {T}
-    chunks = collect(Iterators.partition(1:length(v), cld(length(v), max(1, ntasks))))
-    length(chunks) == 1 && return count_keys(v, chunks[1], base, W)
-    parts = Vector{Vector{Int}}(undef, length(chunks))
-    @sync for (i, c) in enumerate(chunks)
-        Threads.@spawn parts[i] = count_keys(v, c, base, W)
-    end
-    return reduce(+, parts)
+    return tmapreduce(r -> count_keys(v, r, base, W), +, length(v), ntasks; minlen = 0)
 end
 
 # Four interleaved tables, so that runs of equal keys do not serialize on one
@@ -417,14 +407,6 @@ function fill_runs!(v::Vector{T}, counts::AbstractVector{Int}, first::T, rev::Bo
             j += 1
         end
     end
-    n = length(v)
-    if ntasks <= 1
-        fill_slice(1, n)
-    else
-        @sync for t in 1:ntasks
-            a, b = div(n * (t - 1), ntasks) + 1, div(n * t, ntasks)
-            a <= b && Threads.@spawn fill_slice(a, b)
-        end
-    end
+    tforeach(r -> fill_slice(r.start, r.stop), length(v), ntasks; minlen = 0)
     return v
 end

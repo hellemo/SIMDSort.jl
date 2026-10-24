@@ -70,7 +70,7 @@ bytes_of(s::Symbol) = (p = Base.unsafe_convert(Ptr{UInt8}, s); (p, Int(ccall(:st
 function ByteKeys(v::AbstractVector, rev::Bool, ntasks::Int,
                   ptr = Vector{Ptr{UInt8}}(undef, length(v)), len = Vector{Int}(undef, length(v)))
     n = length(v)
-    foreach_range(n, ntasks) do r
+    tforeach(n, ntasks) do r
         @inbounds for i in r
             ptr[i], len[i] = bytes_of(v[i])
         end
@@ -133,16 +133,6 @@ const PERM_SMALL = 64       # runs up to this size are finished by insertion sor
 const PERM_PAR_MIN = 1 << 14
 
 # Apply `f(r)` to about `ntasks` contiguous ranges covering 1:n, concurrently.
-function foreach_range(f::F, n::Int, ntasks::Int) where {F}
-    if ntasks <= 1 || n < PERM_PAR_MIN
-        f(1:n)
-    else
-        @sync for r in Iterators.partition(1:n, cld(n, ntasks))
-            Threads.@spawn f(r)
-        end
-    end
-    return nothing
-end
 
 """
     refine!(ks, perm, off, ntasks)
@@ -155,7 +145,7 @@ order) by the keys' bits from `off` on, stably.
 # sequentially instead of through the string pointers.
 function prefix_cache(ks::ByteKeys, ntasks::Int, pc = Vector{UInt128}(undef, length(ks.ptr)))
     n = length(ks.ptr)
-    foreach_range(n, ntasks) do r
+    tforeach(n, ntasks) do r
         @inbounds for i in r
             pc[i] = (UInt128(keybits_raw(ks, i, 0)) << 64) | UInt128(keybits_raw(ks, i, 64))
         end
@@ -218,12 +208,12 @@ function refine!(ks::KeySource, perm::AbstractVector{Int}, off::Int, ntasks::Int
         simdsort!(keys; ntasks)
         old, ho = scratch_vector(Int, m)
         tg = INSTR[] ? time_ns() : 0
-        foreach_range(m, ntasks) do r
+        tforeach(m, ntasks) do r
             @inbounds for j in r
                 old[j] = perm[j]
             end
         end
-        foreach_range(m, ntasks) do r
+        tforeach(m, ntasks) do r
             @inbounds for j in r
                 perm[j] = old[(keys[j] & mask) % Int + 1]
             end
@@ -243,25 +233,12 @@ function refine!(ks::KeySource, perm::AbstractVector{Int}, off::Int, ntasks::Int
         else
             # Groups of runs of about equal total size, one task each.
             total = sum(length, runs)
-            target = cld(total, 4ntasks)
-            sem = Base.Semaphore(ntasks)
-            tasks = Task[]
-            g = 1
-            while g <= length(runs)
-                h, s = g, 0
-                while h <= length(runs) && (s == 0 || s + length(runs[h]) <= target)
-                    s += length(runs[h])
-                    h += 1
+            groups = balanced_groups(length.(runs), cld(total, 4ntasks))
+            run_limited(groups, ntasks) do gr
+                for r in view(runs, gr)
+                    refine!(ks, view(perm, r), next, 1, sub(r))
                 end
-                group = runs[g:h-1]
-                push!(tasks, spawn_limited(sem) do
-                    for r in group
-                        refine!(ks, view(perm, r), next, 1, sub(r))
-                    end
-                end)
-                g = h
             end
-            foreach(wait, tasks)
         end
         return perm
     finally
@@ -272,7 +249,7 @@ end
 # collect(1:n), written in parallel (a single server core writes ~13 GB/s).
 function identity_perm(n::Int, ntasks::Int)
     p = Vector{Int}(undef, n)
-    foreach_range(n, ntasks) do r
+    tforeach(n, ntasks) do r
         @inbounds for i in r
             p[i] = i
         end
@@ -285,12 +262,11 @@ end
 function window_keys!(keys, ks, pc, perm, off::Int, K::Int, ib::Int, ntasks::Int)
     m = length(keys)
     k1 = window(ks, pc, perm, 1, off, K)
-    nc = (ntasks <= 1 || m < PERM_PAR_MIN) ? 1 : ntasks
-    chunks = collect(Iterators.partition(1:m, cld(m, nc)))
-    ds = zeros(UInt64, length(chunks))
-    foreach_chunk_index(length(chunks)) do c
+    cs = chunks(m, partasks(m, ntasks, PERM_PAR_MIN))
+    ds = zeros(UInt64, length(cs))
+    tforeach_index(length(cs)) do c
         d = zero(UInt64)
-        @inbounds for j in chunks[c]
+        @inbounds for j in cs[c]
             w = window(ks, pc, perm, j, off, K)
             keys[j] = (w << ib) | UInt64(j - 1)
             d |= w ⊻ k1
@@ -305,13 +281,12 @@ end
 # its end.
 function equal_runs(keys, ib::Int, ntasks::Int)
     m = length(keys)
-    nc = (ntasks <= 1 || m < PERM_PAR_MIN) ? 1 : ntasks
-    chunks = collect(Iterators.partition(1:m, cld(m, nc)))
-    parts = [UnitRange{Int}[] for _ in chunks]
-    foreach_chunk_index(length(chunks)) do c
+    cs = chunks(m, partasks(m, ntasks, PERM_PAR_MIN))
+    parts = [UnitRange{Int}[] for _ in cs]
+    tforeach_index(length(cs)) do c
         out = parts[c]
-        j = first(chunks[c])
-        @inbounds while j <= last(chunks[c])
+        j = first(cs[c])
+        @inbounds while j <= last(cs[c])
             h = keys[j] >> ib
             if j > 1 && keys[j-1] >> ib == h     # continues a run that started before
                 j += 1
@@ -378,12 +353,12 @@ cmp_cached(ks::KeySource, a, pa, b, pb) = cmp_from(ks, a, b, 0)
 function permute_by!(v::AbstractVector{T}, p::Vector{Int}, ntasks::Int) where {T}
     w, h = scratch_vector(T, length(v))
     try
-        foreach_range(length(v), ntasks) do r
+        tforeach(length(v), ntasks) do r
             @inbounds for i in r
                 w[i] = v[p[i]]
             end
         end
-        foreach_range(length(v), ntasks) do r
+        tforeach(length(v), ntasks) do r
             @inbounds for i in r
                 v[i] = w[i]
             end
@@ -441,17 +416,17 @@ function symbol_ranks(v::Vector{Symbol}, ntasks::Int)
     n = length(v)
     n < 1024 && return nothing
     limit = n ÷ 4
-    nc = (ntasks <= 1 || n < PERM_PAR_MIN) ? 1 : ntasks
+    nc = partasks(n, ntasks, PERM_PAR_MIN)
     nc == 1 && return symbol_ranks_serial(v, limit)
     # The distinct symbols: a set per chunk, merged pairwise in parallel (the
     # serial dictionary pass took 0.23 s for 10^7 symbols at any thread count).
     t0 = INSTR[] ? time_ns() : 0
-    chunks = collect(Iterators.partition(1:n, cld(n, nc)))
-    sets = [Set{Symbol}() for _ in chunks]
+    cs = chunks(n, nc)
+    sets = [Set{Symbol}() for _ in cs]
     over = Threads.Atomic{Bool}(false)
-    foreach_chunk_index(length(chunks)) do c
+    tforeach_index(length(cs)) do c
         st = sets[c]
-        @inbounds for i in chunks[c]
+        @inbounds for i in cs[c]
             push!(st, v[i])
             if length(st) > limit
                 over[] = true
@@ -464,7 +439,7 @@ function symbol_ranks(v::Vector{Symbol}, ntasks::Int)
     t0 = INSTR[] ? time_ns() : 0
     while length(sets) > 1
         half = cld(length(sets), 2)
-        foreach_chunk_index(length(sets) - half) do c
+        tforeach_index(length(sets) - half) do c
             union!(sets[c], sets[c+half])
         end
         resize!(sets, half)
@@ -482,7 +457,7 @@ function symbol_ranks(v::Vector{Symbol}, ntasks::Int)
     # Concurrent reads of the finished dictionary.
     codes = Vector{Int32}(undef, n)
     t0 = INSTR[] ? time_ns() : 0
-    foreach_range(n, ntasks) do rg
+    tforeach(n, ntasks) do rg
         @inbounds for i in rg
             codes[i] = rank[v[i]]
         end
@@ -532,7 +507,7 @@ function simdsort!(v::Vector{T}; rev::Bool=false, ntasks::Integer=1) where {T<:U
         if r !== nothing
             ranks, sorted = r
             simdsort!(ranks; rev, ntasks)
-            foreach_range(length(v), Int(ntasks)) do rg
+            tforeach(length(v), Int(ntasks)) do rg
                 @inbounds for i in rg
                     v[i] = sorted[ranks[i]]
                 end

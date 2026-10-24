@@ -80,7 +80,7 @@ end
 
 function packed_words(v::Vector{T}, ::Val{M}, ntasks::Int) where {T,M}
     w = Vector{NTuple{M,UInt64}}(undef, length(v))
-    foreach_range(length(v), ntasks) do r
+    tforeach(length(v), ntasks) do r
         @inbounds for i in r
             w[i] = packwords(v[i], Val(M))
         end

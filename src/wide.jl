@@ -61,7 +61,7 @@ end
 # The order words of every element, computed by up to `ntasks` tasks.
 function words_of(f::F, v::AbstractVector, ntasks::Int) where {F}
     w = Vector{typeof(f(first(v)))}(undef, length(v))
-    foreach_range(length(v), ntasks) do r
+    tforeach(length(v), ntasks) do r
         @inbounds for i in r
             w[i] = f(v[i])
         end

@@ -3,22 +3,10 @@
 
 scratch(::Type{T}) where {T} = Vector{T}(undef, max(basecase_max(T), (2UNROLL + 1) * lanes(T)))
 
-# At most `ntasks` tasks of one sort run at a time, as `simdsort!` promises.
-# Julia's scheduler runs a spawned task on any of its threads, so without this
-# `ntasks = 2` in a 56-thread Julia used all 56 cores. A task takes a slot of
-# the semaphore before it starts working; tasks waiting for a slot hold no
-# thread. (The tasks of `ppartition!` are not counted: one per share of
-# `ntasks`, while their parent waits.)
-spawn_limited(f, sem::Base.Semaphore) = Threads.@spawn begin
-    Base.acquire(sem)
-    enter_task!()
-    try
-        f()
-    finally
-        leave_task!()
-        Base.release(sem)
-    end
-end
+# (pqsort! and ppartition! spawn their own tasks. pqsort!'s tasks take a slot
+# of the sort's semaphore like spawn_limited (src/tasks.jl), but a parent
+# returns its slot before waiting for its children; the tasks of ppartition!
+# are not counted: one per share of ntasks, while their parent waits.)
 
 # Ranges above this size may be sorted by a separate task.
 const PAR_MIN = 1 << 16

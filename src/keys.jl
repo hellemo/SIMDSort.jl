@@ -58,13 +58,7 @@ end
 # Counts of NaNs, -0.0s and +0.0s in `k`, from the bit patterns (vectorizes), by
 # up to `ntasks` concurrent tasks.
 function float_scan(k::AbstractVector{T}, ntasks::Integer) where {T<:AbstractFloat}
-    n = length(k)
-    if ntasks <= 1 || n < 1 << 16
-        return float_scan(k)
-    end
-    parts = [Threads.@spawn(float_scan(view(k, c)))
-             for c in Iterators.partition(eachindex(k), cld(n, ntasks))]
-    return reduce((a, b) -> a .+ b, fetch.(parts))
+    return tmapreduce(r -> float_scan(view(k, r)), (a, b) -> a .+ b, length(k), ntasks; minlen = 1 << 16)
 end
 
 function float_scan(k::AbstractVector{T}) where {T<:AbstractFloat}
@@ -97,17 +91,8 @@ function order_zeros!(k::AbstractVector{T}, c::Int) where {T<:AbstractFloat}
 end
 
 # Apply `f!` to `ntasks` contiguous chunks of `k` concurrently.
-function foreach_chunk(f!::F, k::AbstractVector, ntasks::Integer) where {F}
-    n = length(k)
-    if ntasks <= 1 || n < 1 << 16
-        f!(k)
-    else
-        @sync for c in Iterators.partition(eachindex(k), cld(n, ntasks))
-            Threads.@spawn f!(view(k, c))
-        end
-    end
-    return nothing
-end
+foreach_chunk(f!::F, k::AbstractVector, ntasks::Integer) where {F} =
+    tforeach(r -> f!(view(k, r)), length(k), ntasks; minlen = 1 << 16)
 
 """
     nan_partition!(v, rev) -> UnitRange

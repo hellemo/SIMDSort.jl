@@ -15,18 +15,6 @@ const MSD_BUCKETS = 256           # buckets of the distribution pass (bucket ids
 const MSD_OVERSAMPLE = 32         # sample keys per bucket for the splitters
 const MSD_MINN = 1 << 16          # below this, the plain permutation path
 
-# Run f(c) for every chunk index c in 1:nc, one task each when nc > 1.
-function foreach_chunk_index(f::F, nc::Int) where {F}
-    if nc <= 1
-        f(1)
-    else
-        @sync for c in 1:nc
-            Threads.@spawn f(c)
-        end
-    end
-    return nothing
-end
-
 # Branch-free search: the number of splitters spl[1:nb-1] that are <= x (spl
 # sorted, length nb = MSD_BUCKETS, a power of two; spl[nb] is never read).
 @inline function bucket_of(spl::Vector{UInt64}, x::UInt64)
@@ -74,16 +62,16 @@ function sort_by_words!(v::Vector{T}, f::F, rev::Bool, ntasks::Int) where {T,F}
     spl = [smp[j*MSD_OVERSAMPLE] for j in 1:nb-1]
     push!(spl, typemax(UInt64))
     INSTR[] && record_phase!(:msd_sample, time_ns() - ts0)
-    chunks = collect(Iterators.partition(1:n, cld(n, max(1, ntasks))))
-    nc = length(chunks)
+    cs = chunks(n, ntasks)
+    nc = length(cs)
     counts = zeros(Int, nb, nc)
     bk, hb = scratch_vector(UInt8, n)
     tv, ht = scratch_vector(T, n)
     try
         tc = INSTR[] ? time_ns() : 0
-        foreach_chunk_index(nc) do c
+        tforeach_index(nc) do c
             cnt = zeros(Int, nb)
-            @inbounds for i in chunks[c]
+            @inbounds for i in cs[c]
                 d = bucket_of(spl, f(v[i])[1])
                 d = rev ? nb - 1 - d : d
                 bk[i] = d % UInt8
@@ -110,9 +98,9 @@ function sort_by_words!(v::Vector{T}, f::F, rev::Bool, ntasks::Int) where {T,F}
             countmax!(:msd_bucket_max, maximum(sizes))
         end
         ts = INSTR[] ? time_ns() : 0
-        foreach_chunk_index(nc) do c
+        tforeach_index(nc) do c
             pos = start[:, c]
-            @inbounds for i in chunks[c]
+            @inbounds for i in cs[c]
                 d = bk[i] + 1
                 tv[pos[d]] = v[i]
                 pos[d] += 1
@@ -129,27 +117,14 @@ function sort_by_words!(v::Vector{T}, f::F, rev::Bool, ntasks::Int) where {T,F}
         else
             # Groups of buckets of about equal size, several per task, at most
             # ntasks running at a time.
-            target = cld(n, 8ntasks)
-            sem = Base.Semaphore(ntasks)
             # One pair of scratch buffers per running task (at most ntasks), shared
             # by the groups: a pair per group allocated ~64 MB at 8 tasks.
             pool = Channel{Tuple{Vector{UInt64},Vector{Int}}}(ntasks)
             for _ in 1:ntasks
                 put!(pool, (Vector{UInt64}(undef, bmax), Vector{Int}(undef, bmax)))
             end
-            tasks = Task[]
-            b = 1
-            while b <= nb
-                g, sz = b, 0
-                while g <= nb && (sz == 0 || sz + bstart[g+1] - bstart[g] <= target)
-                    sz += bstart[g+1] - bstart[g]
-                    g += 1
-                end
-                bs = b:g-1
-                push!(tasks, spawn_limited(() -> finish_buckets!(v, tv, bstart, bs, f, rev, pool), sem))
-                b = g
-            end
-            foreach(wait, tasks)
+            groups = balanced_groups(diff(bstart), cld(n, 8ntasks))
+            run_limited(bs -> finish_buckets!(v, tv, bstart, bs, f, rev, pool), groups, ntasks)
         end
         INSTR[] && record_phase!(:msd_finish, time_ns() - tf)
         return v
@@ -301,15 +276,15 @@ function distribute_sort!(p::Ptr{S}, n::Int, ntasks::Int) where {S}
     count(i -> smp[i] != smp[i-1], 2:length(smp)) < nb ÷ 4 && return false
     count!(:dist_sorts)
     spl = S[smp[j*MSD_OVERSAMPLE] for j in 1:nb]
-    chunks = collect(Iterators.partition(1:n, cld(n, ntasks)))
-    nc = length(chunks)
+    cs = chunks(n, ntasks)
+    nc = length(cs)
     counts = zeros(Int, nb, nc)
     bk, hb = scratch_vector(UInt16, n)
     tv, ht = scratch_vector(S, n)
     try
         tc = INSTR[] ? time_ns() : 0
-        foreach_chunk_index(nc) do c
-            dist_count!(counts, bk, k, spl, chunks[c], c, Val(nb))
+        tforeach_index(nc) do c
+            dist_count!(counts, bk, k, spl, cs[c], c, Val(nb))
         end
         start = similar(counts)
         bstart = Vector{Int}(undef, nb + 1)
@@ -325,26 +300,13 @@ function distribute_sort!(p::Ptr{S}, n::Int, ntasks::Int) where {S}
         INSTR[] && record_phase!(:dist_count, time_ns() - tc)
         INSTR[] && countmax!(:dist_bucket_max, maximum(b -> bstart[b+1] - bstart[b], 1:nb))
         ts = INSTR[] ? time_ns() : 0
-        foreach_chunk_index(nc) do c
-            dist_scatter!(tv, k, bk, start, chunks[c], c, nb)
+        tforeach_index(nc) do c
+            dist_scatter!(tv, k, bk, start, cs[c], c, nb)
         end
         INSTR[] && record_phase!(:dist_scatter, time_ns() - ts)
         tf = INSTR[] ? time_ns() : 0
-        target = cld(n, 8ntasks)
-        sem = Base.Semaphore(ntasks)
-        tasks = Task[]
-        b = 1
-        while b <= nb
-            g, sz = b, 0
-            while g <= nb && (sz == 0 || sz + bstart[g+1] - bstart[g] <= target)
-                sz += bstart[g+1] - bstart[g]
-                g += 1
-            end
-            bs = b:g-1
-            push!(tasks, spawn_limited(() -> dist_finish!(k, tv, bstart, bs), sem))
-            b = g
-        end
-        foreach(wait, tasks)
+        groups = balanced_groups(diff(bstart), cld(n, 8ntasks))
+        run_limited(bs -> dist_finish!(k, tv, bstart, bs), groups, ntasks)
         INSTR[] && record_phase!(:dist_finish, time_ns() - tf)
         return true
     finally
