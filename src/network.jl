@@ -397,22 +397,38 @@ register by register. `R` must be a power-of-two multiple of `N`.
     return Expr(:block, Expr(:meta, :inline), body)
 end
 
-# Copy `n ≤ R*N` keys at `p` to `buf`, pad with typemax, sort, and copy back.
-@inline function netsort!(p::KeyRef{T}, n::Int, buf::KeyRef{T}, ::Val{R}, ::Val{N}) where {T,R,N}
+# How a leaf's keys enter the networks: as they are, or (Int64 on AVX2, see
+# leaf_sort!) as Float64 offsets from the leaf's minimum lo, whose order is the
+# integers' order and which the networks sort with vminpd/vmaxpd [F5 §III-C].
+struct PlainKeys end
+struct OffsetKeys
+    lo::Int64
+end
+padkey(::PlainKeys, ::Type{T}) where {T} = typemax(T)
+padkey(t::OffsetKeys, ::Type{Int64}) = t.lo + reinterpret(Int64, Inf)   # offset +Inf
+@inline enc(::PlainKeys, x::Vec) = x
+@inline dec(::PlainKeys, x::Vec) = x
+@inline enc(t::OffsetKeys, x::Vec{N,Int64}) where {N} = reinterpret(Vec{N,Float64}, x - Vec{N,Int64}(t.lo))
+@inline dec(t::OffsetKeys, x::Vec{N,Float64}) where {N} = reinterpret(Vec{N,Int64}, x) + Vec{N,Int64}(t.lo)
+
+# Copy `n ≤ R*N` keys at `p` to `buf`, pad (sorting last), sort, and copy back.
+@inline function netsort!(p::KeyRef{T}, n::Int, buf::KeyRef{T}, ::Val{R}, ::Val{N},
+                          tr = PlainKeys()) where {T,R,N}
     W = R * N
     copykeys!(buf, p, n)
+    pad = padkey(tr, T)
     for i in n+1:W
-        st!(buf, typemax(T), i)
+        st!(buf, pad, i)
     end
-    vs = ntuple(r -> vld(Val(N), buf, (r - 1) * N), Val(R))
+    vs = ntuple(r -> enc(tr, vld(Val(N), buf, (r - 1) * N)), Val(R))
     vs = sortnet(vs)
     nfull = n ÷ N
     # Whole output vectors go straight back; the partial one through the buffer.
     for r in 1:R
         if r <= nfull
-            vst(vs[r], p, (r - 1) * N)
+            vst(dec(tr, vs[r]), p, (r - 1) * N)
         elseif r == nfull + 1
-            vst(vs[r], buf, 0)
+            vst(dec(tr, vs[r]), buf, 0)
         end
     end
     copykeys!(shift(p, nfull * N), buf, n - nfull * N)
@@ -441,23 +457,24 @@ const MAXROWS = 32
 basecase_max(::Type{T}) where {T} = MAXROWS * lanes(T)
 
 """
-    small_sort!(p, n, buf)
+    small_sort!(p, n, buf, tr = PlainKeys())
 
 Sort `n ≤ basecase_max(T)` keys at `p`, using `buf` (at least that many keys) as
-scratch. The smallest network with R ∈ {N, 2N, 4N} rows that fits is used.
+scratch. The smallest network with R ∈ {N, 2N, 4N} rows that fits is used; up to
+8 plain keys get an insertion sort.
 """
-@inline function small_sort!(p::KeyRef{T}, n::Int, buf::KeyRef{T}) where {T}
+@inline function small_sort!(p::KeyRef{T}, n::Int, buf::KeyRef{T}, tr = PlainKeys()) where {T}
     N = lanes(T)
-    if n <= 8
+    if n <= 8 && tr isa PlainKeys
         insertion_sort!(p, n)
     elseif n <= N * N
-        netsort!(p, n, buf, Val(N), Val(N))
+        netsort!(p, n, buf, Val(N), Val(N), tr)
     elseif n <= 2N * N
-        netsort!(p, n, buf, Val(min(2N, MAXROWS)), Val(N))
+        netsort!(p, n, buf, Val(min(2N, MAXROWS)), Val(N), tr)
     elseif n <= 4N * N && 4N <= MAXROWS
-        netsort!(p, n, buf, Val(min(4N, MAXROWS)), Val(N))
+        netsort!(p, n, buf, Val(min(4N, MAXROWS)), Val(N), tr)
     else
-        netsort!(p, n, buf, Val(MAXROWS), Val(N))
+        netsort!(p, n, buf, Val(MAXROWS), Val(N), tr)
     end
     return nothing
 end

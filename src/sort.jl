@@ -211,50 +211,10 @@ double_leaves(_) = false
 @inline function leaf_sort!(p::KeyRef{Int64}, n::Int, buf::KeyRef{Int64}, lo::Int64, hi::Int64)
     if double_leaves(target()) && n > 8 && (hi - lo) % UInt64 < UInt64(1) << 62 &&
             !get_zero_subnormals()
-        small_sort_offsets!(p, n, buf, lo)
+        small_sort!(p, n, buf, OffsetKeys(lo))
     else
         small_sort!(p, n, buf)
     end
-    return nothing
-end
-
-@inline function small_sort_offsets!(p::KeyRef{Int64}, n::Int, buf::KeyRef{Int64}, lo::Int64)
-    N = lanes(Int64)
-    R = MAXROWS
-    if n <= N * N
-        netsort_offsets!(p, n, buf, lo, Val(N))
-    elseif n <= 2N * N
-        netsort_offsets!(p, n, buf, lo, Val(2N))
-    elseif n <= 4N * N && 4N <= R
-        netsort_offsets!(p, n, buf, lo, Val(4N))
-    else
-        netsort_offsets!(p, n, buf, lo, Val(R))
-    end
-    return nothing
-end
-
-@inline function netsort_offsets!(p::KeyRef{Int64}, n::Int, buf::KeyRef{Int64}, lo::Int64,
-                                  ::Val{R}) where {R}
-    N = lanes(Int64)
-    copykeys!(buf, p, n)
-    # Padding: lo + (bits of +Inf), so that its offset is +Inf.
-    pad = lo + reinterpret(Int64, Inf)
-    for i in n+1:R*N
-        st!(buf, pad, i)
-    end
-    lv = Vec{N,Int64}(lo)
-    vs = ntuple(r -> reinterpret(Vec{N,Float64}, vld(Val(N), buf, (r - 1) * N) - lv), Val(R))
-    vs = sortnet(vs)
-    nfull = n ÷ N
-    for r in 1:R
-        x = reinterpret(Vec{N,Int64}, vs[r]) + lv
-        if r <= nfull
-            vst(x, p, (r - 1) * N)
-        elseif r == nfull + 1
-            vst(x, buf, 0)
-        end
-    end
-    copykeys!(shift(p, nfull * N), buf, n - nfull * N)
     return nothing
 end
 
