@@ -7,6 +7,8 @@
 # Steps: env setup test build codegen avx512 instrument profile scaling tune
 #        bench types crossover
 # Env:   NT       threads (default: all CPUs of the job)
+#        SORTBENCH_DEPOT  Julia package depot (default /cluster/work/$USER/julia_depot,
+#                 else ~/sortbench_depot; never ~/.julia)
 #        OUT      results directory (default bench/idun/results/<host>-<time>)
 #        ROUNDS   rounds for bench/types (default 9/3), QUICK=1 for a short run
 # Every step logs to $OUT/<step>.log and the script continues after a failed
@@ -21,12 +23,19 @@ mkdir -p "$OUT"
 OUT=$(cd "$OUT" && pwd)
 export OUT NT BENCH_RESULTS="$OUT" JULIA_NUM_THREADS=$NT
 export SIMDSORT_LIB=${SIMDSORT_LIB:-$(cd ../ChapelSort.jl/bench/simd 2>/dev/null && pwd)/libsimdsort.so}
-# One package depot for setup (login node) and the job: off the small home
-# quota if /cluster/work exists. JULIA_DEPOT_PATH set by the caller wins.
-if [ -z "${JULIA_DEPOT_PATH:-}" ] && [ -d "/cluster/work/$USER" ]; then
+# A dedicated package depot, the same for setup and the job: not ~/.julia,
+# whose extra (e.g. private, ssh-only) registries Pkg would try to update,
+# prompting for credentials. On /cluster/work if it exists (home quota).
+# SORTBENCH_DEPOT overrides it.
+if [ -n "${SORTBENCH_DEPOT:-}" ]; then
+    export JULIA_DEPOT_PATH="$SORTBENCH_DEPOT"
+elif [ -d "/cluster/work/$USER" ]; then
     export JULIA_DEPOT_PATH="/cluster/work/$USER/julia_depot"
+else
+    export JULIA_DEPOT_PATH="$HOME/sortbench_depot"
 fi
-echo "julia: $(command -v julia || echo 'NOT FOUND'), depot: ${JULIA_DEPOT_PATH:-~/.julia}, NT=$NT"
+mkdir -p "$JULIA_DEPOT_PATH"
+echo "julia: $(command -v julia || echo 'NOT FOUND'), depot: $JULIA_DEPOT_PATH, NT=$NT"
 QUICK=${QUICK:-0}
 if [ "$QUICK" = 1 ]; then R1=3; R2=1; XMAX=26; else R1=${ROUNDS:-9}; R2=${ROUNDS:-3}; XMAX=28; fi
 JL="julia --startup-file=no"
@@ -47,7 +56,10 @@ step_env() {
 }
 step_setup() {
     $JL --version
-    $JL --project=bench -e 'using Pkg; println("depot: ", DEPOT_PATH[1]); Pkg.instantiate(); Pkg.precompile()'
+    # stdin from /dev/null: a credentials prompt fails at once instead of hanging.
+    $JL --project=bench -e 'using Pkg; println("depot: ", DEPOT_PATH[1]);
+        println("registries: ", join([r.name for r in Pkg.Registry.reachable_registries()], ", "));
+        Pkg.instantiate(); Pkg.precompile()' < /dev/null
 }
 step_test()  { $JL --project=. -e 'using Pkg; Pkg.test()'; }
 step_build() { ../ChapelSort.jl/bench/simd/build.sh; }
