@@ -54,7 +54,13 @@ With `ntasks > 1`, large subranges are sorted by up to `ntasks` concurrent tasks
 `ntasks = Threads.nthreads()` uses all threads.
 """
 function simdsort!(v::AbstractVector; rev::Bool=false, ntasks::Integer=1)
-    sort!(v; rev)
+    # Types whose order is given by order words (extensions define them): the
+    # distribution pass and cache-resident word sorts.
+    if v isa Vector && has_orderwords(eltype(v))
+        length(v) <= 1 && return v
+        return sort_by_words!(v, orderwords, rev, Int(ntasks))
+    end
+    return sort!(v; rev)
 end
 
 function simdsort!(v::Vector{T}; rev::Bool=false, ntasks::Integer=1) where {T<:SortTypes}

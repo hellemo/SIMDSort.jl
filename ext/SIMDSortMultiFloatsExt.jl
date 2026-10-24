@@ -6,7 +6,7 @@
 module SIMDSortMultiFloatsExt
 
 using SIMDSort, MultiFloats
-import SIMDSort: simdsort!, simdsortperm
+import SIMDSort: orderwords, has_orderwords
 
 const MF{T,N} = MultiFloat{T,N}
 
@@ -18,7 +18,7 @@ const MF{T,N} = MultiFloat{T,N}
 nwords(::Type{Float64}, N) = N
 nwords(::Type{Float32}, N) = cld(N, 2)
 
-@generated function words(x::MF{T,N}) where {T,N}
+@generated function orderwords(x::MF{T,N}) where {T<:Union{Float32,Float64},N}
     M = nwords(T, N)
     B = 8sizeof(T)
     parts = [k == 1 ? :(ukey(l[1])) : :(ukey(canon(l[$k]))) for k in 1:N]
@@ -35,13 +35,6 @@ nwords(::Type{Float32}, N) = cld(N, 2)
     end
 end
 
-simdsortperm(v::Vector{<:MF{T}}; rev::Bool=false, ntasks::Integer=1) where {T<:Union{Float32,Float64}} =
-    SIMDSort.wordkeys_sortperm(map(words, v); rev, ntasks)
-
-function simdsort!(v::Vector{<:MF{T}}; rev::Bool=false, ntasks::Integer=1) where {T<:Union{Float32,Float64}}
-    length(v) <= 1 && return v
-    nt = Int(ntasks)
-    return SIMDSort.sort_by_words!(v, words, rev, nt)
-end
+has_orderwords(::Type{<:MF{T}}) where {T<:Union{Float32,Float64}} = true
 
 end

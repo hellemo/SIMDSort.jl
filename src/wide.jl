@@ -177,6 +177,17 @@ end
 # --- multi-word keys -----------------------------------------------------------
 
 """
+    orderwords(x) -> NTuple{M,UInt64}
+
+The order key of `x` as `M` big-endian 64-bit words (most significant first),
+compared lexicographically, for element types `T` with `has_orderwords(T) ==
+true`. Package extensions define both (DoubleFloats, MultiFloats, Quadmath);
+`simdsort!` and `simdsortperm` then sort such vectors by their words.
+"""
+function orderwords end
+has_orderwords(::Type) = false
+
+"""
     WordKeys(w::Vector{NTuple{M,UInt64}}, rev)
 
 Keys given as `M` big-endian 64-bit words each (most significant first), for

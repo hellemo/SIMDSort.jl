@@ -412,7 +412,13 @@ The permutation that sorts `v` stably (as `sortperm(v; rev)`), for vectors of
 `Symbol`. Positions and key bits are packed into `UInt64`s and sorted with the
 vectorized quicksort; other inputs fall back to `sortperm`.
 """
-simdsortperm(v::AbstractVector; rev::Bool=false, ntasks::Integer=1) = sortperm(v; rev)
+function simdsortperm(v::AbstractVector; rev::Bool=false, ntasks::Integer=1)
+    if has_orderwords(eltype(v))
+        length(v) <= 1 && return collect(1:length(v))
+        return wordkeys_sortperm(words_of(orderwords, v, Int(ntasks)); rev, ntasks)
+    end
+    return sortperm(v; rev)
+end
 
 function simdsortperm(v::Vector{T}; rev::Bool=false, ntasks::Integer=1) where {T<:SortTypes}
     length(v) <= 1 && return collect(1:length(v))

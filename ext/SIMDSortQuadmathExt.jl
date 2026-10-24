@@ -4,7 +4,7 @@
 module SIMDSortQuadmathExt
 
 using SIMDSort, Quadmath
-import SIMDSort: simdsort!, simdsortperm
+import SIMDSort: simdsortperm, orderwords, has_orderwords
 
 @inline function key(x::Float128)
     isnan(x) && return typemax(UInt128)
@@ -16,12 +16,8 @@ end
 simdsortperm(v::Vector{Float128}; rev::Bool=false, ntasks::Integer=1) =
     simdsortperm(map(key, v); rev, ntasks)
 
-@inline qwords(x::Float128) = (k = key(x); ((k >> 64) % UInt64, k % UInt64))
-
-function simdsort!(v::Vector{Float128}; rev::Bool=false, ntasks::Integer=1)
-    length(v) <= 1 && return v
-    nt = Int(ntasks)
-    return SIMDSort.sort_by_words!(v, qwords, rev, nt)
-end
+# The words for simdsort! (the distribution pass of SIMDSort.sort_by_words!).
+@inline orderwords(x::Float128) = (k = key(x); ((k >> 64) % UInt64, k % UInt64))
+has_orderwords(::Type{Float128}) = true
 
 end

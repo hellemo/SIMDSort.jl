@@ -15,6 +15,15 @@ signedkey(::Type{T}) where {T<:Union{Int64, UInt64, Float64}} = Int64
 @inline keymap(::Type{<:AbstractFloat}, k::S) where {S} =
     k ⊻ ((k >> (8 * sizeof(S) - 1)) >>> 1)
 
+# f(k), where k is v viewed as a Vector{K} (same memory; T and K bits types of
+# the same size), e.g. floats as their integer bit patterns, or Dates as
+# Int64. The only place where the sort reinterprets a vector in place.
+function as_keys(f::F, v::Vector{T}, ::Type{K}) where {F,T,K}
+    isbitstype(T) && isbitstype(K) && sizeof(T) == sizeof(K) ||
+        throw(ArgumentError("as_keys: $T and $K must be bits types of equal size"))
+    return GC.@preserve v f(unsafe_wrap(Array, Ptr{K}(pointer(v)), length(v)))
+end
+
 # The sort direction as a type: Base's Forward and Reverse orderings. Public
 # functions take `rev::Bool` and convert once (`ordering`); everything below
 # dispatches on the ordering, so each direction gets its own specialized code.

@@ -17,13 +17,13 @@ SIMDSort.fixedwidth(::Type{T}) where {T<:Int64Like} = ok(T) ? 64 : nothing
 
 function simdsort!(v::Vector{T}; rev::Bool=false, ntasks::Integer=1) where {T<:Int64Like}
     ok(T) || return sort!(v; rev)
-    GC.@preserve v simdsort!(unsafe_wrap(Array, Ptr{Int64}(pointer(v)), length(v)); rev, ntasks)
+    SIMDSort.as_keys(k -> simdsort!(k; rev, ntasks), v, Int64)
     return v
 end
 
 function simdsortperm(v::Vector{T}; rev::Bool=false, ntasks::Integer=1) where {T<:Int64Like}
     ok(T) || return sortperm(v; rev)
-    return GC.@preserve v simdsortperm(unsafe_wrap(Array, Ptr{Int64}(pointer(v)), length(v)); rev, ntasks)
+    return SIMDSort.as_keys(k -> simdsortperm(k; rev, ntasks), v, Int64)
 end
 
 end
