@@ -616,9 +616,8 @@ keys, for all six primitive key types. A second run with all six types showed
 a tie or loss at 16 tasks (Int64 0.133 against 0.119 s, Int32 0.072 against
 0.054 s) and clear wins from 32 (Int64 0.075 against 0.112 s at 32, 0.055
 against 0.109 at 56; Float64 0.058 against 0.117 at 56; Int32 0.035 against
-0.047), so `DIST_MINTASKS = 24`. Floats and 32-bit keys were not
-measured with it yet; `bench/measure/scaling.jl` (methods
-"SIMDSort dist" and "SIMDSort quicksort") gives their crossover.
+0.047), so `DIST_MINTASKS = 24`. (`bench/measure/scaling.jl`, methods
+"SIMDSort dist" and "SIMDSort quicksort", measures the crossover.)
 
 ## 8. Other key types: windowed keys
 
