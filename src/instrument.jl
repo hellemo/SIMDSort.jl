@@ -179,6 +179,7 @@ function instrumented(f)
     append!(ACCS, [Acc() for _ in 1:Threads.maxthreadid()])
     ACTIVE_TASKS[] = 0
     INSTR[] = true
+    g0 = Base.gc_num()
     t0 = time_ns()
     result = try
         f()
@@ -186,6 +187,9 @@ function instrumented(f)
         INSTR[] = false
     end
     wall = (time_ns() - t0) / 1e9
+    # Garbage collection during the run (stops all threads; with many threads
+    # and many small allocations it can dominate).
+    gd = Base.GC_Diff(Base.gc_num(), g0)
     ns = mergewith(+, Dict{Symbol,Int}(), (a.ns for a in ACCS)...)
     calls = mergewith(+, Dict{Symbol,Int}(), (a.calls for a in ACCS)...)
     # The fixed slots, under the same names as before.
@@ -221,6 +225,10 @@ function instrumented(f)
         # Counters named *_max hold maxima; all others are sums.
         counters[k] = endswith(string(k), "_max") ? max(get(counters, k, v), v) : get(counters, k, 0) + v
     end
+    counters[:gc_ns] = gd.total_time
+    counters[:gc_pauses] = gd.pause
+    counters[:alloc_bytes] = gd.allocd
+    counters[:alloc_count] = Base.gc_alloc_count(gd)
     return (; result, wall, phases, counters)
 end
 
@@ -231,7 +239,10 @@ Print the phases (sorted by time) and counters of an `instrumented` result.
 """
 print_report(r) = print_report(stdout, r)
 function print_report(io::IO, r)
-    println(io, "wall time: ", round(r.wall; digits = 4), " s")
+    println(io, "wall time: ", round(r.wall; digits = 4), " s; GC ",
+            round(get(r.counters, :gc_ns, 0) / 1e9; digits = 4), " s in ", get(r.counters, :gc_pauses, 0),
+            " pauses; ", round(get(r.counters, :alloc_bytes, 0) / 2^20; digits = 1), " MiB in ",
+            get(r.counters, :alloc_count, 0), " allocations")
     println(io, "phases (task time, s; calls):")
     for (k, (t, c)) in sort(collect(r.phases); by = x -> -x[2][1])
         println(io, "  ", rpad(k, 28), lpad(string(round(t; digits = 4)), 10), "  ", c)

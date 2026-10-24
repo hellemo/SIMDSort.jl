@@ -15,7 +15,7 @@ using SIMDSort, ChapelSort, Printf, Random, Statistics
 const ROUNDS = length(ARGS) >= 1 ? parse(Int, ARGS[1]) : 5
 const MAXLOG = length(ARGS) >= 2 ? parse(Int, ARGS[2]) : 28
 const NT = Threads.nthreads()
-const TASKS = filter(<=(NT), [1, 2, 4, 8])
+const TASKS = unique([filter(<=(NT), [1, 2, 4, 8, 16, 32]); NT])
 const LOGS = filter(<=(MAXLOG), [20, 22, 24, 26, 27, 28])
 
 # (name, element type, rng -> in-place generator)

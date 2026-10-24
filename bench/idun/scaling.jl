@@ -37,6 +37,8 @@ function dist!(v, nt)
 end
 
 rng = Xoshiro(11)
+randstr(n) = String(rand(rng, UInt8[0x30:0x39; 0x41:0x5a; 0x61:0x7a], n))
+const SYMS = [Symbol(randstr(rand(rng, 4:12))) for _ in 1:10^5]
 const L = parse(Int, get(ENV, "SIZE_LOG", "26"))
 # (case, generator, operation, 64-bit primitive?)
 const CASES = [
@@ -46,6 +48,8 @@ const CASES = [
     ("Int32 2^$L", () -> rand(rng, Int32, 2^L), :sort),
     ("Int128 10^7", () -> rand(rng, Int128, 10^7), :sort),
     ("Float64 sortperm 10^7", () -> randn(rng, 10^7), :perm),
+    ("String 8-20 sortperm 2*10^6", () -> [randstr(rand(rng, 8:20)) for _ in 1:2 * 10^6], :perm),
+    ("Symbol 10^5 distinct sort 10^7", () -> rand(rng, SYMS, 10^7), :sort),
 ]
 
 function methods_for(x, op, nt)
