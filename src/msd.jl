@@ -242,10 +242,10 @@ end
 
 # ---------------------------------------------------------------------------
 # Sample-sort top level for many threads (docs/DESIGN.md §7j). The parallel
-# quicksort stops scaling at about 16 threads: on a 2 × 28-core Xeon (Idun) it
+# quicksort stops scaling at about 16 threads: on a 2 × 28-core Xeon Gold 6348 it
 # takes the same time at 16, 32 and 56 threads (UInt64 2^27: 0.29 s), while
 # this step keeps scaling (0.28, 0.18, 0.15 s; Int64 2^26 at 56 threads:
-# 0.059 s against 0.110). At 8 threads it loses (laptop and Idun), so it is
+# 0.059 s against 0.110). At 8 threads it loses (laptop and Xeon), so it is
 # used from DIST_MINTASKS tasks.
 #
 # One distribution into DIST_BUCKETS buckets (a count and a scatter, both
@@ -255,7 +255,7 @@ end
 
 const DIST_BUCKETS = Ref(256)
 const DIST_MINN = Ref(1 << 22)      # keys
-const DIST_MINTASKS = Ref(16)       # Idun: wins from 16 threads, loses at 8
+const DIST_MINTASKS = Ref(16)       # Xeon: wins from 16 threads, loses at 8
 
 # The number of spl[1:nb-1] that are <= x (nb = length(spl), a power of two).
 # (nb a compile-time constant: the loop unrolls into conditional moves; with a

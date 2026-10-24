@@ -1,7 +1,7 @@
 # What the Julia side sees of the machine, and which code paths SIMDSort
-# compiles for it (bench/idun/run.sh step `env`).
+# compiles for it.
 #
-#   julia --project=. bench/idun/env.jl
+#   julia --project=bench/measure bench/measure/env.jl
 
 using SIMDSort, SIMD, InteractiveUtils, Printf
 const Q = SIMDSort

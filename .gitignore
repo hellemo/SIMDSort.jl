@@ -1,4 +1,4 @@
 Manifest.toml
 /bench/Manifest.toml
 /bench/results/*.csv
-/bench/idun/results/
+/bench/measure/results/

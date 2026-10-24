@@ -1,15 +1,14 @@
-# Machine code of the hot kernels on this CPU (bench/idun/run.sh step
-# `codegen`): writes $OUT/asm/<kernel>_<T>.s and a summary table
-# $OUT/codegen.csv with instruction counts that tell whether the AVX-512
-# decisions in docs/AVX512.md hold, e.g. native vpminsq/vpmaxsq in the Int64
+# Machine code of the hot kernels on this CPU: writes $OUT/asm/<kernel>_<T>.s
+# and a summary table $OUT/codegen.csv with instruction counts that tell
+# whether the AVX-512 decisions in docs/AVX512.md hold, e.g. native vpminsq/vpmaxsq in the Int64
 # networks, the size of the 32-row networks, and spills (stack traffic).
 #
-#   OUT=dir julia --project=bench/idun bench/idun/codegen.jl
+#   OUT=dir julia --project=bench/measure bench/measure/codegen.jl
 
 using SIMDSort, SIMD, InteractiveUtils, Printf
 const Q = SIMDSort
 
-const OUT = get(ENV, "OUT", joinpath(@__DIR__, "results", "local"))
+const OUT = get(ENV, "OUT", joinpath(@__DIR__, "results"))
 const ASM = joinpath(OUT, "asm")
 mkpath(ASM)
 

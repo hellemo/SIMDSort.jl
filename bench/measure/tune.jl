@@ -1,15 +1,14 @@
-# Tuning constants on this machine (bench/idun/run.sh step `tune`). Each
-# variant is a copy of src/ with one constant changed, loaded as its own
-# module, so that all variants run interleaved in one process (separate
+# Tuning constants on this machine. Each variant is a copy of src/ with one
+# constant changed, loaded as its own module, so that all variants run interleaved in one process (separate
 # processes drift by several percent). Writes $OUT/tune.csv with the best and
 # median time per case and variant, and prints each variant relative to the
 # baseline (the committed values).
 #
-#   OUT=dir julia -t <n> --project=bench/idun bench/idun/tune.jl [rounds]
+#   OUT=dir julia -t <n> --project=bench/measure bench/measure/tune.jl [rounds]
 
 using SIMD, Random, Statistics, Printf
 
-const OUT = get(ENV, "OUT", joinpath(@__DIR__, "results", "local"))
+const OUT = get(ENV, "OUT", joinpath(@__DIR__, "results"))
 mkpath(OUT)
 const ROUNDS = length(ARGS) >= 1 ? parse(Int, ARGS[1]) : 5
 const NT = Threads.nthreads()

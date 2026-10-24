@@ -1,7 +1,7 @@
-# Lean environment for the Idun run (bench/idun/run.sh): everything the
-# measurement scripts need, but no plotting or table packages (CairoMakie has
-# been troublesome on Idun). Tables and charts are made locally from the
-# fetched CSV files with the bench/ environment.
+# Lean environment for the measurement scripts in this directory (and the
+# tests, for remote runs): everything they need, but no plotting or table
+# packages, which are heavy to install on remote machines. Tables and charts
+# are made with the bench/ environment from the CSV files.
 [deps]
 BitIntegers = "c3b6d118-76ef-56ca-8cc7-ebb389d030a1"
 ChapelSort = "b557a38e-b6f0-494b-a80d-8b33d309e162"

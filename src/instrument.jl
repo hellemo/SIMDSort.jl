@@ -1,5 +1,5 @@
 # Optional instrumentation: phase timers and event counters, for finding weak
-# spots on machines where interactive profiling is impractical (bench/idun/).
+# spots on machines where interactive profiling is impractical (bench/measure/).
 # Off by default; then every probe costs one load and branch, and probes sit only
 # at coarse steps (per pass or per partition call, never per key).
 #

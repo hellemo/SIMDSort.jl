@@ -1,9 +1,8 @@
 # Phase timers and event counters (src/instrument.jl) for the main cases at 1,
-# NT/4 and NT threads (bench/idun/run.sh step `instrument`). Writes
-# $OUT/instrument.txt (readable reports) and $OUT/instrument.csv (one row per
+# NT/4 and NT threads. Writes $OUT/instrument.txt (readable reports) and $OUT/instrument.csv (one row per
 # case, thread count and phase or counter).
 #
-#   OUT=dir julia -t <n> --project=bench/idun bench/idun/instrument.jl
+#   OUT=dir julia -t <n> --project=bench/measure bench/measure/instrument.jl
 #
 # Each case: a warm-up, the best of 3 plain runs ("wall_plain") and the best of
 # 3 instrumented runs; the report is from the fastest instrumented run, so the
@@ -13,7 +12,7 @@
 using SIMDSort, Random, Printf, Dates, DoubleFloats, Quadmath, MultiFloats
 const Q = SIMDSort
 
-const OUT = get(ENV, "OUT", joinpath(@__DIR__, "results", "local"))
+const OUT = get(ENV, "OUT", joinpath(@__DIR__, "results"))
 mkpath(OUT)
 const NT = Threads.nthreads()
 const L = parse(Int, get(ENV, "SIZE_LOG", "26"))     # 2^L keys for 4- and 8-byte types

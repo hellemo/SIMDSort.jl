@@ -1,8 +1,7 @@
-# Thread scaling (bench/idun/run.sh step `scaling`): best and median time per
-# case, method and thread count (1, 2, 4, ... and all threads), fresh input per
+# Thread scaling: best and median time per case, method and thread count (1, 2, 4, ... and all threads), fresh input per
 # round, methods interleaved in random order. Writes $OUT/scaling.csv.
 #
-#   OUT=dir julia -t <n> --project=bench/idun bench/idun/scaling.jl [rounds]
+#   OUT=dir julia -t <n> --project=bench/measure bench/measure/scaling.jl [rounds]
 #
 # "SIMDSort dist" is the sample-sort top level for 64-bit keys
 # (src/msd.jl), disabled by default because it loses on the 8-thread
@@ -11,7 +10,7 @@
 using SIMDSort, ChapelSort, Libdl, Random, Statistics, Printf
 const Q = SIMDSort
 
-const OUT = get(ENV, "OUT", joinpath(@__DIR__, "results", "local"))
+const OUT = get(ENV, "OUT", joinpath(@__DIR__, "results"))
 mkpath(OUT)
 const ROUNDS = length(ARGS) >= 1 ? parse(Int, ARGS[1]) : 5
 const NT = Threads.nthreads()

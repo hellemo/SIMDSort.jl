@@ -598,7 +598,7 @@ Two lessons for the code:
 - `foreach_range` runs serially below `PERM_PAR_MIN` elements, so it must not
   be used to spread a handful of chunks over tasks (`foreach_chunk_index`).
 
-**On a many-core node it wins.** On Idun (2 × 28-core Xeon Gold 6348, Ice
+**On a many-core node it wins.** On a 2 × 28-core Xeon Gold 6348 (Ice
 Lake-SP), with `ntasks` correctly bounding the number of running tasks (it did
 not before: `ntasks` only set the task grain), the parallel quicksort stops
 scaling at about 16 threads, while the distribution step keeps going:
@@ -613,7 +613,7 @@ scaling at about 16 threads, while the distribution step keeps going:
 
 So `sort_auto!` uses it from `DIST_MINTASKS = 16` tasks and `DIST_MINN = 2^22`
 keys, for all six primitive key types. Floats and 32-bit keys were not
-measured with it yet; the next Idun run (`bench/idun/scaling.jl`, methods
+measured with it yet; `bench/measure/scaling.jl` (methods
 "SIMDSort dist" and "SIMDSort quicksort") gives their crossover.
 
 ## 8. Other key types: windowed keys
@@ -715,7 +715,7 @@ go last.
 
 `src/instrument.jl` has optional phase timers and event counters. They are
 for machines where interactive profiling is impractical, such as cluster
-nodes (`bench/idun/`).
+nodes (`bench/measure/`).
 
 ```julia
 r = SIMDSort.instrumented(() -> simdsort!(v; ntasks = 8))
