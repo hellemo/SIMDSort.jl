@@ -1,4 +1,4 @@
-# Large temporary buffers of plain bits outside the GC heap (docs/DESIGN.md §8).
+# Large temporary buffers of plain bits outside the GC heap (docs/src/design.md §8).
 #
 # A sort that allocates hundreds of MB of temporaries triggers full
 # collections, and each one marks every live object. With 10^7 strings to
@@ -22,11 +22,24 @@
 
 const MALLOC_MIN_BYTES = 1 << 20
 
+"""
+    ScratchArena()
+
+Large temporary buffers outside the GC heap: `alloc!(arena, T, n)` gives a
+`Vector{T}` (malloc'ed for bits types of `MALLOC_MIN_BYTES` or more, an
+ordinary array otherwise), and `release!(arena)` frees them all; call it in a
+`finally`. See the top of `src/scratchmem.jl` for why.
+"""
 struct ScratchArena
     blocks::Vector{Ptr{Cvoid}}
 end
 ScratchArena() = ScratchArena(Ptr{Cvoid}[])
 
+"""
+    alloc!(arena, T, n) -> Vector{T}
+
+A buffer of `n` elements of type `T` that lives until `release!(arena)`.
+"""
 function alloc!(arena::ScratchArena, ::Type{T}, n::Integer) where {T}
     (isbitstype(T) && Int(n) * sizeof(T) >= MALLOC_MIN_BYTES) || return Vector{T}(undef, n)
     nb = Int(n) * sizeof(T)
@@ -37,6 +50,11 @@ function alloc!(arena::ScratchArena, ::Type{T}, n::Integer) where {T}
     return unsafe_wrap(Array, Ptr{T}(p), Int(n); own = false)
 end
 
+"""
+    release!(arena)
+
+Free the arena's malloc'ed buffers (they must no longer be used).
+"""
 function release!(arena::ScratchArena)
     foreach(Libc.free, arena.blocks)
     empty!(arena.blocks)

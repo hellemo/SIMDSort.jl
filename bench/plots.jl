@@ -1,4 +1,4 @@
-# Charts for the README and docs/DESIGN.md, from the CSV files written by
+# Charts for the README and docs/src/design.md, from the CSV files written by
 # bench.jl, types.jl and crossover.jl:
 #
 #   julia --project=bench bench/plots.jl
@@ -8,7 +8,7 @@
 using AlgebraOfGraphics, CairoMakie, CSV, DataFrames, Printf
 
 const RESULTS = joinpath(@__DIR__, "results")
-const OUT = joinpath(@__DIR__, "..", "docs")
+const OUT = joinpath(@__DIR__, "..", "docs", "src", "assets")
 # PLOTS_PNG=<dir>: also write PNG previews there.
 const PNG = get(ENV, "PLOTS_PNG", "")
 

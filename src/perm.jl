@@ -1,5 +1,5 @@
 # sortperm, and sorting strings and symbols, on top of the UInt64 quicksort
-# (docs/DESIGN.md §8).
+# (docs/src/design.md §8).
 #
 # Refining runs of equal windows with the next window is the MSD idea of radix
 # sorting strings [MBM93]; skipping bits that all keys of a run share is also

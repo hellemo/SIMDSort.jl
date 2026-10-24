@@ -2,3 +2,4 @@ Manifest.toml
 /bench/Manifest.toml
 /bench/results/*.csv
 /bench/measure/results/
+/docs/build/

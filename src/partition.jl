@@ -1,4 +1,4 @@
-# In-place, bidirectional vectorized partition (docs/DESIGN.md §3).
+# In-place, bidirectional vectorized partition (docs/src/design.md §3).
 #
 # [Bra17, Algorithm 3]: keys set aside at both ends, the next vectors loaded from
 # the side with less free space, each vector split to both ends. [WBGS22 §2.1]:

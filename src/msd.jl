@@ -1,5 +1,5 @@
 # One out-of-place distribution pass ahead of the cache-resident sorts
-# (docs/DESIGN.md §8), the top level of a sample sort [IPS4o].
+# (docs/src/design.md §8), the top level of a sample sort [IPS4o].
 #
 # For wide keys (Int128, UInt256, Float128, Double64, MultiFloats, packed tuples)
 # `sort!` used to compute a permutation of all n keys and then gather v[p]: a
@@ -20,10 +20,14 @@ const MSD_MINN = 1 << 16          # below this, the plain permutation path
 # into one of nb buckets (its id stored as one byte), then scatter the elements
 # stably into a scratch array, bucket by bucket, with one task per chunk.
 
-# Branch-free search: the number of splitters spl[1:nb-1] that are <= x (spl
-# sorted, length nb; spl[nb] is never read). nb is a compile-time constant: the
-# loop unrolls into conditional moves; with a run-time nb it compiled to
-# branches, 8 mispredictions per key.
+"""
+    bucket_of(spl, x, Val(nb)) -> Int
+
+Branch-free search: the number of splitters spl[1:nb-1] that are <= x (spl
+sorted, length nb; spl[nb] is never read). nb is a compile-time constant: the
+loop unrolls into conditional moves; with a run-time nb it compiled to
+branches, 8 mispredictions per key.
+"""
 @inline function bucket_of(spl::Vector{S}, x::S, ::Val{nb}) where {S,nb}
     i = 0
     step = nb >> 1
@@ -34,10 +38,14 @@ const MSD_MINN = 1 << 16          # below this, the plain permutation path
     return i
 end
 
-# Splitters from a sorted random sample of key(v[i]), every MSD_OVERSAMPLE-th
-# [IPS4o] (radix digits would put skewed keys, such as random floats, into a
-# handful of buckets). `nothing` if the sample has too few distinct keys for
-# balanced buckets.
+"""
+    sample_splitters(key, v, nb) -> Vector or nothing
+
+Splitters from a sorted random sample of key(v[i]), every MSD_OVERSAMPLE-th
+[IPS4o] (radix digits would put skewed keys, such as random floats, into a
+handful of buckets). `nothing` if the sample has too few distinct keys for
+balanced buckets.
+"""
 function sample_splitters(key::F, v::AbstractVector, nb::Int) where {F}
     n = length(v)
     smp = [key(@inbounds v[1])]
@@ -52,7 +60,11 @@ function sample_splitters(key::F, v::AbstractVector, nb::Int) where {F}
     return [smp[j*MSD_OVERSAMPLE] for j in 1:nb]
 end
 
-# Bucket of a wide element by its leading order word f(x)[1] (mirrored for rev).
+"""
+    WordBucket(f, spl, rev)
+
+Bucket of a wide element by its leading order word f(x)[1] (mirrored for rev).
+"""
 struct WordBucket{F}
     f::F
     spl::Vector{UInt64}
@@ -63,22 +75,34 @@ end
     return c.rev ? MSD_BUCKETS - 1 - d : d
 end
 
-# Bucket of a primitive key.
+"""
+    KeyBucket(spl)
+
+Bucket of a primitive key.
+"""
 struct KeyBucket{S}
     spl::Vector{S}
 end
 @inline (c::KeyBucket)(x) = bucket_of(c.spl, x, Val(DIST_BUCKETS))
 
-# The chunks of the input, where chunk c writes bucket b (start[b, c]), and the
-# buckets (bucket b is bstart[b]:bstart[b+1]-1).
+"""
+    Distribution
+
+The chunks of the input, where chunk c writes bucket b (start[b, c]), and the
+buckets (bucket b is bstart[b]:bstart[b+1]-1).
+"""
 struct Distribution
     cs::Vector{UnitRange{Int}}
     start::Matrix{Int}
     bstart::Vector{Int}
 end
 
-# Count: ids[i] = classify(src[i]) ∈ 0:nb-1 for every i, then bucket-major
-# prefix sums.
+"""
+    distribution(classify, src, ids, nb, ntasks) -> Distribution
+
+Count: ids[i] = classify(src[i]) ∈ 0:nb-1 for every i, then bucket-major
+prefix sums.
+"""
 function distribution(classify::C, src::AbstractVector, ids::AbstractVector{UInt8},
                       nb::Int, ntasks::Int) where {C}
     cs = chunks(length(src), ntasks)
@@ -112,7 +136,11 @@ function count_chunk!(counts, ids, classify::C, src, r, c, nb) where {C}
     return nothing
 end
 
-# Scatter: dst[...] = src[i] into the buckets ids[i], stably.
+"""
+    scatter!(dst, src, ids, dist)
+
+Scatter: dst[...] = src[i] into the buckets ids[i], stably.
+"""
 function scatter!(dst::AbstractVector, src::AbstractVector, ids::AbstractVector{UInt8}, dist::Distribution)
     tforeach_index(length(dist.cs)) do c
         scatter_chunk!(dst, src, ids, dist.start, dist.cs[c], c)
@@ -178,8 +206,12 @@ function sort_by_words!(v::Vector{T}, f::F, rev::Bool, ntasks::Int) where {T,F}
     end
 end
 
-# Small inputs, and too few distinct leading words: the permutation of the
-# windowed sort, applied in place.
+"""
+    sort_by_words_perm!(v, f, rev, ntasks)
+
+Small inputs, and too few distinct leading words: the permutation of the
+windowed sort, applied in place.
+"""
 sort_by_words_perm!(v, f::F, rev::Bool, ntasks::Int) where {F} =
     permute_by!(v, wordkeys_sortperm(words_of(f, v, ntasks); rev, ntasks), ntasks)
 
@@ -191,9 +223,13 @@ function finish_buckets!(v, tv, bstart, bs, f::F, rev::Bool, keys::Vector{UInt64
     end
 end
 
-# Sort tv[a:e] stably by order words into v[a:e]: one SIMD sort of 64-bit keys
-# (a window of the order words just below the bucket's common prefix, above the
-# local position), then a full comparison within the rare runs of equal windows.
+"""
+    finish_bucket!(v, tv, a, e, f, rev, keys, idx)
+
+Sort tv[a:e] stably by order words into v[a:e]: one SIMD sort of 64-bit keys
+(a window of the order words just below the bucket's common prefix, above the
+local position), then a full comparison within the rare runs of equal windows.
+"""
 function finish_bucket!(v, tv, a::Int, e::Int, f::F, rev::Bool, keys, idx) where {F}
     m = e - a + 1
     m <= 0 && return
@@ -241,7 +277,7 @@ function finish_bucket!(v, tv, a::Int, e::Int, f::F, rev::Bool, keys, idx) where
 end
 
 # ---------------------------------------------------------------------------
-# Sample-sort top level for many threads (docs/DESIGN.md §7j). The parallel
+# Sample-sort top level for many threads (docs/src/design.md §7j). The parallel
 # quicksort stops scaling at about 16 threads: on a 2 × 28-core Xeon Gold 6348 it
 # takes the same time at 16, 32 and 56 threads (UInt64 2^27: 0.29 s), while
 # this step keeps scaling (0.28, 0.18, 0.15 s; Int64 2^26 at 56 threads:
@@ -259,9 +295,13 @@ const DIST_MINTASKS = Ref(24)       # Xeon: ties or loses at 16 tasks, wins at 3
 
 use_distribution(n::Int, ntasks::Int) = ntasks >= DIST_MINTASKS[] && n >= DIST_MINN[]
 
-# The quicksort, or above DIST_MINTASKS tasks and DIST_MINN keys the
-# sample-sort top level (which falls back to the quicksort when the sample
-# has too few distinct keys).
+"""
+    sort_auto!(k, ntasks)
+
+The quicksort, or above DIST_MINTASKS tasks and DIST_MINN keys the
+sample-sort top level (which falls back to the quicksort when the sample
+has too few distinct keys).
+"""
 function sort_auto!(k::KeyVector, ntasks::Int)
     n = length(k)
     use_distribution(n, ntasks) && @phase(:distribution, distribute_sort!(k, ntasks)) && return nothing

@@ -51,7 +51,7 @@ Other element types and other array types fall back to `sort!`/`sortperm`.
 
 The algorithm follows the published descriptions of vectorized quicksort. It was
 written from the papers, without using code from Google Highway (vqsort) or Intel's
-x86-simd-sort. [docs/DESIGN.md](docs/DESIGN.md) describes each part, with
+x86-simd-sort. [docs/src/design.md](docs/src/design.md) describes each part, with
 citations, the measurements behind the parameter choices, and where the
 implementation deviates from the papers.
 
@@ -96,9 +96,16 @@ raw (pointer) backing. Measured with the same code, the safe one costs
 17–19% on one thread (the partition loop reloads the array's data address
 around every SIMD.jl store), so the kernels use pointers. Everything around
 them works on arrays and views, and the remaining unsafe code is in a few
-documented places. docs/DESIGN.md §10 has the measurements.
+documented places. docs/src/design.md §10 has the measurements.
 `bench/ab.jl` compares a baseline source tree against the working tree, run
 interleaved in one process; every refactoring step had to pass it.
+
+### Documentation
+
+The documentation (usage, API, benchmarks, the design document, AVX-512
+notes, the measuring scripts, internals) is built with Documenter:
+`julia --project=docs -e 'using Pkg; Pkg.instantiate()'`, then
+`julia --project=docs docs/make.jl` (HTML in `docs/build/`).
 
 ## Results
 
@@ -116,8 +123,8 @@ Measured on an Intel Core Ultra 7 268V (Lunar Lake: 4 P + 4 E cores, AVX2,
 To reproduce, run `bench/bench.jl`, `bench/types.jl` and `bench/crossover.jl`,
 then `bench/tables.jl` (these tables) and `bench/plots.jl` (the charts).
 
-![Random keys, one thread](docs/random1.svg)
-![Random keys, 8 threads](docs/random8.svg)
+![Random keys, one thread](docs/src/assets/random1.svg)
+![Random keys, 8 threads](docs/src/assets/random8.svg)
 
 Seconds per sort; 2^26 keys (2^27 for `UInt64`). In every row the fastest
 single-threaded and the fastest 8-thread result are bold.
@@ -149,11 +156,11 @@ single-threaded and the fastest 8-thread result are bold.
   duplicate-heavy inputs. ChapelSort's parallel radix sort leads for `UInt64` at
   2^27 keys and for presorted inputs.
 
-![Duplicates and presorted inputs](docs/special.svg)
+![Duplicates and presorted inputs](docs/src/assets/special.svg)
 
 ### Other types
 
-![sortperm speedup over Base](docs/types_sortperm.svg)
+![sortperm speedup over Base](docs/src/assets/types_sortperm.svg)
 
 10^7 elements (BigInt, BigFloat, Float64x4, VersionNumber: 10^6), best of 3
 rounds:
@@ -200,23 +207,23 @@ rounds:
 - **`sortperm`:** SIMDSort wins most rows on one thread.
 - **`sort` for wide fixed-width types** (Int128, UInt256, Float128, Double64,
   MultiFloats, packed tuples and pairs): one sample-sort distribution pass, then
-  cache-resident SIMD sorts of the buckets (docs/DESIGN.md §8). It used to go
+  cache-resident SIMD sorts of the buckets (docs/src/design.md §8). It used to go
   through a permutation and a gather.
 - **8 threads:** SIMDSort leads in 19 of 34 rows, including `sort` for
   every fixed-width type. ChapelSort's radix sort leads in most 8-thread
   `sortperm` rows and for strings and Symbols.
 
-![sort speedup over Base](docs/types_sort.svg)
+![sort speedup over Base](docs/src/assets/types_sort.svg)
 
 ### Quicksort or radix sort?
 
-![Crossover between ChapelSort and SIMDSort](docs/crossover.svg)
+![Crossover between ChapelSort and SIMDSort](docs/src/assets/crossover.svg)
 
 The radix sort is faster only with 8 tasks, for 64-bit integer keys (and for
 `UInt64` mostly at ≥ 2^26 keys). The quicksort is faster for everything else,
-including all floats and all 32-bit keys. See docs/DESIGN.md §7.h.
+including all floats and all 32-bit keys. See docs/src/design.md §7.h.
 
-[docs/DESIGN.md §7](docs/DESIGN.md) has the profile breakdown, per-level costs,
+[docs/src/design.md §7](docs/src/design.md) has the profile breakdown, per-level costs,
 the effect of each optimization, the analysis of the remaining gaps, and the
 ideas that were rejected. `bench/profile.jl` reproduces the breakdown.
 
@@ -226,7 +233,7 @@ ideas that were rejected. `bench/profile.jl` reproduces the breakdown.
   - CPUs without AVX2 (and ARM) get SIMD.jl's portable lowering. It is correct
     and covered by the tests with `SIMD_JL_GENERIC=1`, but about 4× slower.
   - On AVX-512 the code selects the single 32-row network and native 64-bit
-    min/max, but has not been measured there. [docs/AVX512.md](docs/AVX512.md)
+    min/max, but has not been measured there. [docs/src/avx512.md](docs/src/avx512.md)
     describes what remains to be measured, and `bench/avx512.jl` measures it.
 - No `by` or `lt` keywords.
 - `simdsort!` on the six primitive types is not stable. This only matters for

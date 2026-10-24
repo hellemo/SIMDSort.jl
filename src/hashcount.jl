@@ -1,6 +1,6 @@
 # Few distinct values over a wide range: count them in a hash table, after
 # [CAFS] (V. S. Shlyk, "CAFS: A Cache-Aware Frequency Sort for Low-Cardinality
-# Integer Data on x86-64", arXiv:2605.25040, 2026; docs/DESIGN.md §1). CAFS probes
+# Integer Data on x86-64", arXiv:2605.25040, 2026; docs/src/design.md §1). CAFS probes
 # a cache-line bucket with AVX2 compares; this version probes linearly. The counting sort in sort.jl covers small key *ranges*; this covers few
 # distinct *values* anywhere in the range.
 #

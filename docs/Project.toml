@@ -1,0 +1,11 @@
+[deps]
+Documenter = "e30172f5-a6a5-5a46-863b-614d45cd2de4"
+SIMD = "fdea26ae-647d-5447-a871-4b548cad5224"
+SIMDSort = "0db4c8ee-f0ef-4abc-a572-3607934b7ab8"
+
+[sources]
+SIMD = {url = "https://github.com/hellemo/SIMD.jl", rev = "permute-compress"}
+SIMDSort = {path = ".."}
+
+[compat]
+Documenter = "1"

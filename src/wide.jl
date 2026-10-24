@@ -1,4 +1,4 @@
-# Other key types on the windowed sort of perm.jl (docs/DESIGN.md §8): fixed-size
+# Other key types on the windowed sort of perm.jl (docs/src/design.md §8): fixed-size
 # integers wider than 64 bits (Int128, UInt128, BitIntegers.jl types), and
 # BigInt and BigFloat through order-preserving byte encodings.
 
@@ -185,6 +185,14 @@ true`. Package extensions define both (DoubleFloats, MultiFloats, Quadmath);
 `simdsort!` and `simdsortperm` then sort such vectors by their words.
 """
 function orderwords end
+
+"""
+    has_orderwords(T) -> Bool
+
+Whether elements of type `T` define [`orderwords`](@ref), so that
+`simdsort!` and `simdsortperm` sort vectors of them by their words. `false`
+unless a method is added for `T`.
+"""
 has_orderwords(::Type) = false
 
 """

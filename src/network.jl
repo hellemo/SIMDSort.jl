@@ -1,5 +1,5 @@
 # Base case: a vectorized sorting network over an R × N matrix held in R registers
-# of N lanes (docs/DESIGN.md §5). The network code is generated at compile time
+# of N lanes (docs/src/design.md §5). The network code is generated at compile time
 # from the comparator lists below.
 #
 # [Bat68]: odd-even merge sort and merge networks (batcher_pairs,
@@ -317,7 +317,7 @@ end
 
 Code for an R×N network (R = 32, more registers than AVX2 has) built from two
 R/2-row networks, which fit in the 16 registers, and a bitonic merge done half
-by half (docs/DESIGN.md §5):
+by half (docs/src/design.md §5):
 
 1. sort rows 0..R/2-1 (A) and rows R/2..R-1 (B) as R/2×N matrices; each
    comes back as N·R/2 sorted keys, register by register;

@@ -1,4 +1,4 @@
-# Where does the time go? Three measurements behind docs/DESIGN.md §7:
+# Where does the time go? Three measurements behind docs/src/design.md §7:
 #   1. share of the sort spent in each component (statistical profile),
 #   2. partition cost per key by range size, with and without prefetch,
 #   3. base-case cost per call by range size.

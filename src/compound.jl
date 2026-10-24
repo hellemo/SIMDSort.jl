@@ -1,4 +1,4 @@
-# Tuples, Pairs and VersionNumbers (docs/DESIGN.md §8).
+# Tuples, Pairs and VersionNumbers (docs/src/design.md §8).
 #
 # Tuples and Pairs compare lexicographically, component by component with
 # `isless`. Their sort permutation is built from stable permutations of the

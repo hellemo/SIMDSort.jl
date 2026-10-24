@@ -1,4 +1,4 @@
-# Measurements for AVX-512 machines; see docs/AVX512.md.
+# Measurements for AVX-512 machines; see docs/src/avx512.md.
 #
 #   julia -t <n> --project=bench bench/avx512.jl [part|net|sort|wide|all]
 #

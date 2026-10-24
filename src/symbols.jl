@@ -1,4 +1,4 @@
-# Symbols (docs/DESIGN.md §8). Symbols are interned: equal names are the same
+# Symbols (docs/src/design.md §8). Symbols are interned: equal names are the same
 # object, so a symbol is identified by its address, and vectors of symbols
 # usually have few distinct values. They are counted in hash tables, as the
 # numeric hash counting does (hashcount.jl, [CAFS]), and only the distinct

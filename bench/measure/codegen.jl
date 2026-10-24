@@ -1,6 +1,6 @@
 # Machine code of the hot kernels on this CPU: writes $OUT/asm/<kernel>_<T>.s
 # and a summary table $OUT/codegen.csv with instruction counts that tell
-# whether the AVX-512 decisions in docs/AVX512.md hold, e.g. native vpminsq/vpmaxsq in the Int64
+# whether the AVX-512 decisions in docs/src/avx512.md hold, e.g. native vpminsq/vpmaxsq in the Int64
 # networks, the size of the 32-row networks, and spills (stack traffic).
 #
 #   OUT=dir julia --project=bench/measure bench/measure/codegen.jl

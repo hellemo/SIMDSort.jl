@@ -1,4 +1,4 @@
-# Pivot selection and the quicksort recursion (docs/DESIGN.md §2 and §4).
+# Pivot selection and the quicksort recursion (docs/src/design.md §2 and §4).
 #
 # [Hoa62] quicksort; [WBGS22 Alg. 1]: handling of an empty right side (min/max
 # scan, then the minimum as pivot); [WBGS22 §2.2]: pivot from lane-wise medians

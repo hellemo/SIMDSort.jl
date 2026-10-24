@@ -4,11 +4,11 @@
 Vectorized sorting in Julia on top of SIMD.jl: a vectorized quicksort for
 primitive numbers, with counting and hash counting for few distinct values,
 MSD radix refinement for `sortperm`, strings and other key types, and a
-sample-sort step for wide fixed-width types. See `docs/DESIGN.md` for the
+sample-sort step for wide fixed-width types. See `docs/src/design.md` for the
 algorithms and their sources.
 """
 # Sources, cited in the code by these tags (full references in README.md and
-# docs/DESIGN.md):
+# docs/src/design.md):
 #   [Hoa62]  Hoare, Quicksort (1962)                      sort.jl: qsort!
 #   [Mus97]  Musser, introspective sorting (1997)         sort.jl: depth limit
 #   [Bat68]  Batcher, sorting networks (1968)             network.jl
@@ -70,11 +70,18 @@ function simdsort!(v::Vector{T}; rev::Bool=false, ntasks::Integer=1) where {T<:S
     return sort_primitive!(keyclass(T), v, ordering(rev), Int(ntasks))
 end
 
-# How the six primitive types are sorted. Each class keeps its own (measured)
-# order of the cheap checks for special inputs.
-struct MappedKeys end       # Int32, Int64, UInt64: mapped to signed keys
-struct NativeKeys end       # UInt32: sorted as is
-struct FloatKeys end        # Float32, Float64: sorted as floats
+"""
+    MappedKeys(), NativeKeys(), FloatKeys()
+
+How the six primitive types are sorted (`keyclass(T)`): `Int32`, `Int64` and
+`UInt64` are mapped to signed keys; `UInt32` is sorted as is; `Float32` and
+`Float64` are sorted as floats. Each class has its own `sort_primitive!`
+method, which keeps its own (measured) order of the cheap checks for special
+inputs (counting, presorted, hash counting).
+"""
+struct MappedKeys end
+struct NativeKeys end
+struct FloatKeys end
 keyclass(::Type{<:Union{Int32,Int64,UInt64}}) = MappedKeys()
 keyclass(::Type{UInt32}) = NativeKeys()
 keyclass(::Type{<:Union{Float32,Float64}}) = FloatKeys()
