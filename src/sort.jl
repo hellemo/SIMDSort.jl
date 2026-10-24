@@ -111,13 +111,13 @@ function vextrema(p::KeyRef{T}, n::Int) where {T}
     return minimum(min(lo, x)), maximum(max(hi, x))
 end
 
-@inline partition_auto!(p::KeyRef{T}, n::Int, pivot::T, buf::KeyRef{T}) where {T} =
-    use_prefetch(T, n) ? partition!(p, n, pivot, buf, Val(UNROLL), Val(true)) :
-                         partition!(p, n, pivot, buf, Val(UNROLL))
+# f(Val(prefetch)) with prefetching for ranges above PF_MIN_BYTES.
+@inline with_prefetch(f::F, ::Type{T}, n::Int) where {F,T} = use_prefetch(T, n) ? f(Val(true)) : f(Val(false))
 
+@inline partition_auto!(p::KeyRef{T}, n::Int, pivot::T, buf::KeyRef{T}) where {T} =
+    with_prefetch(pf -> partition!(p, n, pivot, buf, Val(UNROLL), pf), T, n)
 @inline partition3_auto!(p::KeyRef{T}, n::Int, pivot::T, buf::KeyRef{T}) where {T} =
-    use_prefetch(T, n) ? partition3!(p, n, pivot, buf, Val(UNROLL), Val(true)) :
-                         partition3!(p, n, pivot, buf, Val(UNROLL))
+    with_prefetch(pf -> partition3!(p, n, pivot, buf, Val(UNROLL), pf), T, n)
 
 """
     split!(p, n, pivot, dup, buf, partition) -> (a, b)

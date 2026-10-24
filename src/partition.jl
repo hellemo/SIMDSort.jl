@@ -54,38 +54,30 @@ use_prefetch(::Type{T}, n::Int) where {T} = n * sizeof(T) > PF_MIN_BYTES
     return lw + c, rw - (N - c)
 end
 
-@inline part_all(::Tuple{}, pv, p, lw, rw) = (lw, rw)
-@inline function part_all(xs::Tuple, pv, p, lw, rw)
-    lw, rw = part1(first(xs), pv, p, lw, rw)
-    return part_all(Base.tail(xs), pv, p, lw, rw)
+# Apply the per-vector kernel (part1 or part3) to each vector of xs in turn.
+@inline part_all(kernel::K, ::Tuple{}, pv, p, lw, rw) where {K} = (lw, rw)
+@inline function part_all(kernel::K, xs::Tuple, pv, p, lw, rw) where {K}
+    lw, rw = kernel(first(xs), pv, p, lw, rw)
+    return part_all(kernel, Base.tail(xs), pv, p, lw, rw)
 end
 
-"""
-    partition!(p, n, pivot, buf, Val(U), Val(PF)=Val(false), Val(branchfree=false)) -> m
-
-Reorder the `n ≥ 2U*N` keys at `p` so that the first `m` are `≤ pivot` and the rest
-are `> pivot`. `buf` must hold at least `2U*N + N` keys. `U` vectors are processed
-per iteration. With `PF`, the keys `PFDIST` ahead of each read are prefetched.
-"""
-function partition!(p::KeyRef{T}, n::Int, pivot::T, buf::KeyRef{T}, ::Val{U},
-                    ::Val{PF}=Val(false), ::Val{BF}=Val(false)) where {T,U,PF,BF}
-    N = lanes(T)
+# The part shared by partition! and partition3!: set aside UN keys at each end
+# (freeing UN slots there), then partition U vectors at a time loaded from the
+# side with less free space (so both sides always have ≥ UN free), then single
+# vectors, and finally append the fewer than N unread keys to the buffer.
+# Returns (lw, rw, m): written [0, lw) and [rw, n), m keys in the buffer, and
+# [lw, rw) is free and exactly as large as the buffer contents (part3 drops
+# the keys equal to the pivot, which only adds free space).
+@inline function partition_main!(kernel::K, p::KeyRef{T}, n::Int, pv::Vec{N,T}, buf::KeyRef{T},
+                                 ::Val{U}, ::Val{PF}) where {K,T,N,U,PF}
     UN = U * N
-    pv = Vec{N,T}(pivot)
-    # Set aside UN keys from each end; this frees UN slots at both ends.
     copykeys!(buf, p, UN)
     copykeys!(shift(buf, UN), shift(p, n - UN), UN)
     left, right = UN, n - UN    # unread keys: [left, right)
     lw, rw = 0, n               # written: [0, lw) and [rw, n)
-
-    # Load from the side with less free space; afterwards both sides have ≥ UN.
     while right - left >= UN
         fromleft = left - lw <= rw - right
-        if BF
-            src = ifelse(fromleft, left, right - UN)
-            left += ifelse(fromleft, UN, 0)
-            right -= ifelse(fromleft, 0, UN)
-        elseif fromleft
+        if fromleft
             src = left
             left += UN
         else
@@ -98,7 +90,7 @@ function partition!(p::KeyRef{T}, n::Int, pivot::T, buf::KeyRef{T}, ::Val{U},
                 prefetch(p, pa + c)
             end
         end
-        lw, rw = part_all(vldU(Val(U), Val(N), p, src), pv, p, lw, rw)
+        lw, rw = part_all(kernel, vldU(Val(U), Val(N), p, src), pv, p, lw, rw)
     end
     while right - left >= N
         if left - lw <= rw - right
@@ -108,14 +100,25 @@ function partition!(p::KeyRef{T}, n::Int, pivot::T, buf::KeyRef{T}, ::Val{U},
             right -= N
             src = right
         end
-        lw, rw = part1(vld(Val(N), p, src), pv, p, lw, rw)
+        lw, rw = kernel(vld(Val(N), p, src), pv, p, lw, rw)
     end
-
-    # Fewer than N unread keys: append them to the buffer. Now [lw, rw) is free and
-    # exactly as large as the buffer contents.
     r = right - left
     copykeys!(shift(buf, 2UN), shift(p, left), r)
-    m = 2UN + r
+    return lw, rw, 2UN + r
+end
+
+"""
+    partition!(p, n, pivot, buf, Val(U), Val(PF)=Val(false)) -> m
+
+Reorder the `n ≥ 2U*N` keys at `p` so that the first `m` are `≤ pivot` and the rest
+are `> pivot`. `buf` must hold at least `2U*N + N` keys. `U` vectors are processed
+per iteration. With `PF`, the keys `PFDIST` ahead of each read are prefetched.
+"""
+function partition!(p::KeyRef{T}, n::Int, pivot::T, buf::KeyRef{T}, ::Val{U},
+                    ::Val{PF}=Val(false)) where {T,U,PF}
+    N = lanes(T)
+    pv = Vec{N,T}(pivot)
+    lw, rw, m = partition_main!(part1, p, n, pv, buf, Val(U), Val(PF))
     i = 0
     # While at least 2N keys remain, rw - lw ≥ 2N and the two stores are disjoint.
     while m - i >= 2N
@@ -146,12 +149,6 @@ end
     return lw + c, rw - (N - d)
 end
 
-@inline part3_all(::Tuple{}, pv, p, lw, rw) = (lw, rw)
-@inline function part3_all(xs::Tuple, pv, p, lw, rw)
-    lw, rw = part3(first(xs), pv, p, lw, rw)
-    return part3_all(Base.tail(xs), pv, p, lw, rw)
-end
-
 """
     partition3!(p, n, pivot, buf, Val(U), Val(PF)=Val(false)) -> (a, b)
 
@@ -161,43 +158,8 @@ pivot, those in `[b, n)` above it, and `[a, b)` holds the pivot value.
 function partition3!(p::KeyRef{T}, n::Int, pivot::T, buf::KeyRef{T}, ::Val{U},
                      ::Val{PF}=Val(false)) where {T,U,PF}
     N = lanes(T)
-    UN = U * N
     pv = Vec{N,T}(pivot)
-    copykeys!(buf, p, UN)
-    copykeys!(shift(buf, UN), shift(p, n - UN), UN)
-    left, right = UN, n - UN
-    lw, rw = 0, n
-    # Dropped keys only add free space, so the argument of `partition!` holds.
-    while right - left >= UN
-        fromleft = left - lw <= rw - right
-        if fromleft
-            src = left
-            left += UN
-        else
-            right -= UN
-            src = right
-        end
-        if PF
-            pa = fromleft ? left + PFDIST : right - PFDIST
-            for c in 0:(64 ÷ sizeof(T)):(UN - 1)     # one prefetch per 64-byte line
-                prefetch(p, pa + c)
-            end
-        end
-        lw, rw = part3_all(vldU(Val(U), Val(N), p, src), pv, p, lw, rw)
-    end
-    while right - left >= N
-        if left - lw <= rw - right
-            src = left
-            left += N
-        else
-            right -= N
-            src = right
-        end
-        lw, rw = part3(vld(Val(N), p, src), pv, p, lw, rw)
-    end
-    r = right - left
-    copykeys!(shift(buf, 2UN), shift(p, left), r)
-    m = 2UN + r
+    lw, rw, m = partition_main!(part3, p, n, pv, buf, Val(U), Val(PF))
     i = 0
     # [lw, rw) holds at least as many slots as keys left in the buffer.
     while m - i >= N && rw - lw >= 2N

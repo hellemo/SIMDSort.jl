@@ -41,8 +41,8 @@ function main()
     kernels = Any[]
     for T in (Int32, UInt32, Float32, Int64, Float64)
         P = Ptr{T}
-        push!(kernels, ("partition", T, Q.partition!, (P, Int, T, P, Val{U}, Val{false}, Val{false})))
-        push!(kernels, ("partition_prefetch", T, Q.partition!, (P, Int, T, P, Val{U}, Val{true}, Val{false})))
+        push!(kernels, ("partition", T, Q.partition!, (P, Int, T, P, Val{U}, Val{false})))
+        push!(kernels, ("partition_prefetch", T, Q.partition!, (P, Int, T, P, Val{U}, Val{true})))
         push!(kernels, ("partition3", T, Q.partition3!, (P, Int, T, P, Val{U}, Val{false})))
         push!(kernels, ("small_sort", T, Q.small_sort!, (P, Int, P)))
     end
