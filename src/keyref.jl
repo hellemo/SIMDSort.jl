@@ -30,12 +30,17 @@ const KeyRef{T} = Union{Ptr{T},ArrRange{T}}
 # kernels use pointers; everything around them works on arrays and views.
 const SAFE_KEYS = false
 
+# Test mode: kernels on arrays with bounds checks on. The test matrix runs the
+# whole test suite once with this set (a rewritten copy of the source), which
+# checks that the pointer kernels never read or write outside their arrays.
+const CHECK_KEYS = false
+
 # The key reference for the keys of v (and for scratch buffers), and the
 # array that owns them (to keep alive while raw pointers are used).
 const KeyVector{T} = Union{Vector{T},SubArray{T,1,Vector{T},Tuple{UnitRange{Int}},true}}
-@inline keyref(v::Vector) = SAFE_KEYS ? ArrRange(v) : pointer(v)
+@inline keyref(v::Vector) = (SAFE_KEYS || CHECK_KEYS) ? ArrRange(v) : pointer(v)
 @inline keyref(v::SubArray{T,1,Vector{T},Tuple{UnitRange{Int}},true}) where {T} =
-    SAFE_KEYS ? ArrRange(parent(v), first(parentindices(v)[1]) - 1) : pointer(v)
+    (SAFE_KEYS || CHECK_KEYS) ? ArrRange(parent(v), first(parentindices(v)[1]) - 1) : pointer(v)
 # A scratch buffer as a reference of the same kind as p (the caller keeps buf
 # alive while raw pointers are used).
 @inline scratchref(::Ptr, buf::Vector) = pointer(buf)
@@ -49,15 +54,17 @@ keyowner(v::SubArray) = parent(v)
 
 # N keys as a vector from offset i, and back.
 @inline vld(::Val{N}, p::Ptr{T}, i::Int) where {N,T} = vload(Vec{N,T}, p + i * sizeof(T))
-@inline vld(::Val{N}, r::ArrRange{T}, i::Int) where {N,T} = @inbounds vload(Vec{N,T}, r.v, r.off + i + 1)
+@inline vld(::Val{N}, r::ArrRange{T}, i::Int) where {N,T} =
+    CHECK_KEYS ? vload(Vec{N,T}, r.v, r.off + i + 1) : @inbounds(vload(Vec{N,T}, r.v, r.off + i + 1))
 @inline vst(x::Vec, p::Ptr{T}, i::Int) where {T} = vstore(x, p + i * sizeof(T))
-@inline vst(x::Vec, r::ArrRange, i::Int) = (@inbounds vstore(x, r.v, r.off + i + 1); nothing)
+@inline vst(x::Vec, r::ArrRange, i::Int) =
+    (CHECK_KEYS ? vstore(x, r.v, r.off + i + 1) : @inbounds(vstore(x, r.v, r.off + i + 1)); nothing)
 
 # One key, 1-based like unsafe_load (element i - 1).
 @inline ld(p::Ptr, i::Integer) = unsafe_load(p, i)
-@inline ld(r::ArrRange, i::Integer) = @inbounds r.v[r.off+i]
+@inline ld(r::ArrRange, i::Integer) = CHECK_KEYS ? r.v[r.off+i] : @inbounds(r.v[r.off+i])
 @inline st!(p::Ptr, x, i::Integer) = (unsafe_store!(p, x, i); nothing)
-@inline st!(r::ArrRange, x, i::Integer) = (@inbounds r.v[r.off+i] = x; nothing)
+@inline st!(r::ArrRange, x, i::Integer) = (CHECK_KEYS ? (r.v[r.off+i] = x) : (@inbounds r.v[r.off+i] = x); nothing)
 
 # n keys from src to dst (overlap allowed, as memmove).
 @inline copykeys!(dst::Ptr{T}, src::Ptr{T}, n::Integer) where {T} = (unsafe_copyto!(dst, src, n); nothing)
