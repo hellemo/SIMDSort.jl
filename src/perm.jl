@@ -31,11 +31,11 @@ length_tiebreak(::KeySource, a::Int, b::Int) = 0
 
 # --- numbers -------------------------------------------------------------------
 
-struct NumKeys{T,U} <: KeySource
-    v::Vector{T}
+struct NumKeys{T,U,V<:AbstractVector{T}} <: KeySource
+    v::V
     rev::Bool
 end
-NumKeys(v::Vector{T}, rev::Bool) where {T} = NumKeys{T,unsigned(signedkey(T))}(v, rev)
+NumKeys(v::AbstractVector{T}, rev::Bool) where {T} = NumKeys{T,unsigned(signedkey(T)),typeof(v)}(v, rev)
 
 # Order-preserving map to unsigned integers. NaNs (any sign or payload) map to
 # the largest value, where `isless` puts them.
@@ -436,7 +436,7 @@ function simdsortperm(v::AbstractVector; rev::Bool=false, ntasks::Integer=1)
     return sortperm(v; rev)
 end
 
-function simdsortperm(v::Vector{T}; rev::Bool=false, ntasks::Integer=1) where {T<:SortTypes}
+function simdsortperm(v::KeyVector{T}; rev::Bool=false, ntasks::Integer=1) where {T<:SortTypes}
     length(v) <= 1 && return collect(1:length(v))
     return refine!(NumKeys(v, rev), identity_perm(length(v), Int(ntasks)), 0, Int(ntasks))
 end

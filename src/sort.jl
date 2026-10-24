@@ -299,7 +299,7 @@ A sample of 1024 keys rejects wide ranges and sets up a count table over the
 sample's range plus a margin. Keys outside it go to an overflow slot; if any do,
 the table is redone over the exact range from a min/max scan.
 """
-function counting_sort!(v::Vector{T}, o::Ord, ntasks::Int) where {T<:Integer}
+function counting_sort!(v::KeyVector{T}, o::Ord, ntasks::Int) where {T<:Integer}
     n = length(v)
     n < COUNT_MINN && return false
     # A sample's range is at most the full range, so a wide sample rejects early
@@ -316,7 +316,8 @@ function counting_sort!(v::Vector{T}, o::Ord, ntasks::Int) where {T<:Integer}
     counts = count_all(v, T(lo), Int(hi - lo + 1), ntasks)
     if counts[end] != 0
         # Keys outside the table: count again over the exact range.
-        mn, mx = GC.@preserve v vextrema(keyref(v), n)
+        owner = keyowner(v)
+        mn, mx = GC.@preserve owner vextrema(keyref(v), n)
         r = Int128(mx) - Int128(mn)
         (r <= COUNT_MAXRANGE && r < n ÷ 4) || return false
         lo = Int128(mn)
@@ -333,14 +334,14 @@ end
 
 # Counts per slot of [base, base + W) plus one overflow slot, by up to `ntasks`
 # tasks.
-function count_all(v::Vector{T}, base::T, W::Int, ntasks::Int) where {T}
+function count_all(v::AbstractVector{T}, base::T, W::Int, ntasks::Int) where {T}
     return tmapreduce(r -> count_keys(v, r, base, W), +, length(v), ntasks; minlen = 0)
 end
 
 # Four interleaved tables, so that runs of equal keys do not serialize on one
 # counter. The slot is (x - base) mod 2^w, which is below W exactly for the keys in
 # [base, base + W) because that interval does not wrap; the others land in slot W.
-function count_keys(v::Vector{T}, c::UnitRange{Int}, base::T, W::Int) where {T}
+function count_keys(v::AbstractVector{T}, c::UnitRange{Int}, base::T, W::Int) where {T}
     U = unsigned(T)
     w = UInt(W)
     t = zeros(Int, W + 1, 4)
@@ -362,7 +363,7 @@ end
 
 # Write counts[d] copies of first + (d - 1) for each d (descending for
 # Reverse). With several tasks, each fills an equal slice of `v`.
-function fill_runs!(v::Vector{T}, counts::AbstractVector{Int}, first::T, o::Ord,
+function fill_runs!(v::AbstractVector{T}, counts::AbstractVector{Int}, first::T, o::Ord,
                     ntasks::Int) where {T}
     m = length(counts)
     ord = runorder(o, m)

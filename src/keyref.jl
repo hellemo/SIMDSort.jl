@@ -1,7 +1,7 @@
 # Where the sorting kernels read and write keys: a key reference r, addressed
 # by 0-based element offsets, with a handful of primitives. Two kinds:
 #
-#   ArrRange{T}(v, off)   element i is v[off + i + 1]: safe array accesses
+#   ArrRange(v, off)      element i is v[off + i + 1]: safe array accesses
 #                         (SIMD.jl's vload/vstore on the Vector, @inbounds)
 #   Ptr{T}                element i is at p + i*sizeof(T): raw pointer accesses
 #
@@ -9,12 +9,12 @@
 # sort uses is decided at its entry points (keyref, SAFE_KEYS), so that both
 # can be measured against each other (docs/DESIGN.md).
 
-struct ArrRange{T}
-    v::Vector{T}
+struct ArrRange{T,V<:AbstractVector{T}}
+    v::V
     off::Int
 end
-ArrRange(v::Vector{T}) where {T} = ArrRange{T}(v, 0)
-Base.eltype(::Type{ArrRange{T}}) where {T} = T
+ArrRange(v::AbstractVector) = ArrRange(v, 0)
+Base.eltype(::Type{<:ArrRange{T}}) where {T} = T
 
 const KeyRef{T} = Union{Ptr{T},ArrRange{T}}
 
@@ -37,7 +37,10 @@ const CHECK_KEYS = false
 
 # The key reference for the keys of v (and for scratch buffers), and the
 # array that owns them (to keep alive while raw pointers are used).
-const KeyVector{T} = Union{Vector{T},SubArray{T,1,Vector{T},Tuple{UnitRange{Int}},true}}
+# Key vectors: vectors, contiguous views of them, and vectors reinterpreted as
+# integer keys of the same size (floats, Dates).
+const ReinterpretedVector{T} = Base.ReinterpretArray{T,1,S,Vector{S},false} where {S}
+const KeyVector{T} = Union{Vector{T},SubArray{T,1,Vector{T},Tuple{UnitRange{Int}},true},ReinterpretedVector{T}}
 @inline keyref(v::Vector) = (SAFE_KEYS || CHECK_KEYS) ? ArrRange(v) : pointer(v)
 @inline keyref(v::SubArray{T,1,Vector{T},Tuple{UnitRange{Int}},true}) where {T} =
     (SAFE_KEYS || CHECK_KEYS) ? ArrRange(parent(v), first(parentindices(v)[1]) - 1) : pointer(v)
@@ -45,12 +48,13 @@ const KeyVector{T} = Union{Vector{T},SubArray{T,1,Vector{T},Tuple{UnitRange{Int}
 # alive while raw pointers are used).
 @inline scratchref(::Ptr, buf::Vector) = pointer(buf)
 @inline scratchref(::ArrRange, buf::Vector) = ArrRange(buf)
+@inline keyref(v::Base.ReinterpretArray) = (SAFE_KEYS || CHECK_KEYS) ? ArrRange(v) : pointer(v)
 keyowner(v::Vector) = v
-keyowner(v::SubArray) = parent(v)
+keyowner(v::Union{SubArray,Base.ReinterpretArray}) = parent(v)
 
 # The reference moved k elements on.
 @inline shift(p::Ptr{T}, k::Integer) where {T} = p + k * sizeof(T)
-@inline shift(r::ArrRange{T}, k::Integer) where {T} = ArrRange{T}(r.v, r.off + k)
+@inline shift(r::ArrRange, k::Integer) = ArrRange(r.v, r.off + k)
 
 # N keys as a vector from offset i, and back.
 @inline vld(::Val{N}, p::Ptr{T}, i::Int) where {N,T} = vload(Vec{N,T}, p + i * sizeof(T))

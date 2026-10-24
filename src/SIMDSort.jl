@@ -81,16 +81,15 @@ keyclass(::Type{<:Union{Float32,Float64}}) = FloatKeys()
 
 # Integers are mapped to signed keys of the same width (an order-preserving
 # involution on the bits, complemented for Reverse), sorted, and mapped back.
-function sort_primitive!(::MappedKeys, v::Vector{T}, o::Ord, nt::Int) where {T}
+function sort_primitive!(::MappedKeys, v::KeyVector{T}, o::Ord, nt::Int) where {T}
     @phase(:counting_check, counting_sort!(v, o, nt)) && return v
     # Check for sorted input before the key map, which preserves the order.
     @phase(:presorted_check, presorted!(v, o, nt)) && return v
     @phase(:hash_check, hash_count_sort!(v, o, nt)) && return v
-    as_keys(v, signedkey(T)) do k
-        @phase :keymap foreach_chunk(c -> map_keys!(c, T, o), k, nt)
-        sort_auto!(k, nt)
-        @phase :keyunmap foreach_chunk(c -> unmap_keys!(c, T, o), k, nt)
-    end
+    k = reinterpret(signedkey(T), v)     # the same memory, as signed keys
+    @phase :keymap foreach_chunk(c -> map_keys!(c, T, o), k, nt)
+    sort_auto!(k, nt)
+    @phase :keyunmap foreach_chunk(c -> unmap_keys!(c, T, o), k, nt)
     return v
 end
 
