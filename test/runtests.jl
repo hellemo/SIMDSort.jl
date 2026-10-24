@@ -249,9 +249,22 @@ end
                     rand(rng, names, 60_000),                      # > n/4 distinct
                     [names[rand(rng) < 0.5 ? 1 : rand(rng, 1:20_000)] for _ in 1:100_000],
                     fill(:only, 5000), Symbol[]]
-        for sy in symcases, rev in (false, true), nt in (1, 3, 8)
+        for sy in symcases, rev in (false, true), nt in (1, 3, 8, 56)
             @test simdsortperm(sy; rev, ntasks=nt) == sortperm(sy; rev)
             @test simdsort(sy; rev, ntasks=nt) == sort(sy; rev)
+        end
+        # The merge of nearly half-full tables in short slot ranges: keys
+        # pushed past the end of a range by linear probing, and wrapping around.
+        for np in (2, 7, 64)
+            cap = 1024
+            tables = [SIMDSort.CountTable{Symbol}(cap) for _ in 1:np]
+            want = Dict{Symbol,Int}()
+            for t in tables, x in rand(rng, names[1:2000], 450)
+                SIMDSort.add_count!(t, x, 1)
+                want[x] = get(want, x, 0) + 1
+            end
+            got = Dict(zip(SIMDSort.merge_tables(tables, cap)...))
+            @test got == want && length(SIMDSort.merge_tables(tables, cap)[1]) == length(want)
         end
         r = SIMDSort.instrumented(() -> simdsort!(rand(rng, names[1:50], 100_000); ntasks = 4))
         @test get(r.counters, :symbol_sorts, 0) == 1

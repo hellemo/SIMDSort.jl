@@ -27,12 +27,16 @@ function symbol_counts(v::Vector{Symbol}, ntasks::Int)
     limit = min(n ÷ 4, SYM_MAXK)
     est = chao1([hashkey(v[i]) for i in 1:(n ÷ HASH_SAMPLE):n])
     est > limit && return nothing
-    cap = max(1 << 10, nextpow(2, ceil(Int, 4 * est)))
     cs = chunks(n, partasks(n, ntasks, PERM_PAR_MIN))
-    tables = [CountTable{Symbol}(cap) for _ in cs]
+    # A chunk has at most as many distinct symbols as keys.
+    cap = max(1 << 10, nextpow(2, ceil(Int, 4 * min(est, maximum(length, cs)))))
+    tables = Vector{CountTable{Symbol}}(undef, length(cs))
     ok = Vector{Bool}(undef, length(cs))
+    # Each task makes its own table: in parallel, and in memory near its core.
     @phase :symbol_count tforeach_index(length(cs)) do c
-        ok[c] = count_into!(tables[c], v, cs[c])
+        t = CountTable{Symbol}(cap)
+        tables[c] = t
+        ok[c] = count_into!(t, v, cs[c])
     end
     all(ok) || (count!(:symbol_count_aborts); return nothing)
     return @phase :symbol_merge merge_tables(tables, cap)
@@ -40,7 +44,8 @@ end
 
 # The keys of all tables with their summed counts. With several tables, task p
 # merges the keys whose hash slot (all tables have the same capacity) falls in
-# the p-th share of the slots, so the parts are disjoint.
+# the p-th share of the slots, so the parts are disjoint. Each task reads only
+# its share of each table (see merge_part), so the merge reads every table once.
 function merge_tables(tables::Vector{CountTable{K}}, cap::Int) where {K}
     np = length(tables)
     np == 1 && return compact(tables[1])
@@ -54,14 +59,23 @@ function merge_tables(tables::Vector{CountTable{K}}, cap::Int) where {K}
 end
 
 # The keys of the tables whose hash slot is in `slots`, with summed counts.
+# With linear probing a key sits at its hash slot or after it, with no empty
+# slot in between, so the keys of `slots` are in these slots and in the run of
+# occupied slots after them (wrapping around; a table is at most half full).
 function merge_part(tables::Vector{CountTable{K}}, mask::Int, slots::UnitRange{Int}) where {K}
     part = CountTable{K}(64)
     used = 0
-    for t in tables, (x, c) in t.slots
-        (c == 0 || !(hashslot(x, mask) in slots)) && continue
-        used += add_count!(part, x, c)
-        if 2used > capacity(part)           # keep it at most half full
-            part = rehash(part)
+    for t in tables
+        ts = t.slots
+        s = first(slots)
+        @inbounds while s <= last(slots) || ts[(s&mask)+1][2] != 0
+            x, c = ts[(s&mask)+1]
+            s += 1
+            (c == 0 || !(hashslot(x, mask) in slots)) && continue
+            used += add_count!(part, x, c)
+            if 2used > capacity(part)           # keep it at most half full
+                part = rehash(part)
+            end
         end
     end
     return compact(part)
