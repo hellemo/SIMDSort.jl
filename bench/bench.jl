@@ -134,7 +134,7 @@ function main()
     case("UInt64 sorted, 2^26", rng -> sort!(rand(rng, UInt64, 2^26)))
     case("UInt64 reversed, 2^26", rng -> sort!(rand(rng, UInt64, 2^26); rev = true))
     case("Int32, 2^20", rng -> rand(rng, Int32, 2^20))
-    out = joinpath(@__DIR__, "results", "bench.csv")
+    out = joinpath(get(ENV, "BENCH_RESULTS", joinpath(@__DIR__, "results")), "bench.csv")
     mkpath(dirname(out))
     write_rows(out, "case,method,nthreads,n,best,median",
                [string("\"", r.case, "\",\"", r.method, "\",", r.nthreads, ",", r.n, ",", r.best, ",", r.median)

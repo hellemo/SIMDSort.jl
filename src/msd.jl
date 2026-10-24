@@ -8,9 +8,8 @@
 # splitters from a sorted random sample (radix digits would put skewed keys,
 # such as random floats, into a handful of buckets). Counting stores each
 # element's bucket as one byte, so the stable scatter of the values into a
-# scratch array (in parallel) never recomputes a key. Each bucket then gets its
-# permutation from the windowed sort and is gathered back into `v` while it is
-# in cache.
+# scratch array (in parallel) never recomputes a key. Each bucket is then
+# sorted into `v` while it is in cache (finish_bucket!).
 
 const MSD_BUCKETS = 256           # buckets of the distribution pass (bucket ids are UInt8)
 const MSD_OVERSAMPLE = 32         # sample keys per bucket for the splitters
@@ -54,8 +53,8 @@ function sort_by_words!(v::Vector{T}, f::F, rev::Bool, ntasks::Int) where {T,F}
     n < MSD_MINN && return permute_by!(v, wordkeys_sortperm(words_of(f, v, ntasks); rev, ntasks), ntasks)
     count!(:msd_sorts)
     # Splitters: leading words of a sorted random sample, every MSD_OVERSAMPLE-th
-    # (the sample-sort top level of IPS4o / [WBGS22]'s vqsort; radix digits put
-    # skewed keys such as random floats into a handful of buckets).
+    # [IPS4o] (radix digits put skewed keys such as random floats into a
+    # handful of buckets).
     nb = MSD_BUCKETS
     ts0 = INSTR[] ? time_ns() : 0
     smp = Vector{UInt64}(undef, nb * MSD_OVERSAMPLE)

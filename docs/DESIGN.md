@@ -31,9 +31,11 @@ permutation table on AVX2.
   Integer Data on x86-64.* arXiv:2605.25040, 2026. Used: the Chao1 estimate of
   the number of distinct keys from 1024 samples, and hash counting (§1).
 
-Considered but not implemented (DESIGN §7):
-- **IPS4o/IPS2Ra:** M. Axtmann, S. Witt, D. Ferizovic, P. Sanders. *Engineering
+- **[IPS4o]** M. Axtmann, S. Witt, D. Ferizovic, P. Sanders. *Engineering
   in-place (shared-memory) sorting algorithms.* ACM TOPC, 2022. arXiv:2009.13569.
+  Used: a sample-sort distribution step with splitters from a sorted random
+  sample and branch-free bucket search (§8, §7.j). Its in-place block
+  permutation is not used: the distribution here is out of place.
 
 Notation: $N$ is the number of lanes per vector (8 for 32-bit and 4 for 64-bit keys
 with 256-bit AVX2 vectors), $n$ the length of the range being sorted.
@@ -561,6 +563,45 @@ interleaved, with fresh inputs:
 Final: `Float64` 0.542 s, against x86-simd-sort's 0.579 s; SIMDQuickSort is the
 fastest one-thread sort for every numeric type measured (README).
 
+### j. A sample-sort top level for 64-bit keys at 8 threads (disabled)
+
+At 8 threads ChapelSort's radix sort beat the quicksort on random `UInt64`
+(2^27 keys: 0.33 s against 0.43 s, §7.h). The idea was to replace the
+memory-bound top levels of the quicksort with one distribution pass [IPS4o]:
+- sample the keys and choose splitters;
+- count (keeping each key's bucket in a `UInt16` array) and scatter into a
+  scratch array, in parallel;
+- quicksort every bucket on one thread, then copy it back while it is in cache.
+
+`distribute_sort!` (`src/msd.jl`) does this, interleaved against the quicksort
+(8 threads, best of 7):
+
+| | quicksort | 256 buckets | 1024 | 4096 | ChapelSort |
+|---|---:|---:|---:|---:|---:|
+| `UInt64` 2^27 | 0.470 | 0.514 | 0.565 | 0.646 | 0.343 |
+| `Int64` 2^26 | 0.186 | 0.233 | 0.268 | 0.305 | 0.213 |
+| `Int64` normal 2^26 | 0.182 | 0.224 | 0.241 | 0.267 | 0.372 |
+
+Instrumented (`UInt64` 2^27, 256 buckets): count 0.12 s, scatter 0.15 s,
+bucket sorts about 0.3 s. Of the scatter, 0.09 s are first-touch page faults on
+the fresh 1 GB scratch array: with the arrays kept between calls, the whole
+sort takes 0.419 s, 5% under the quicksort. But keeping 1 GB per sort is not
+acceptable. The rest of the quicksort's time at 8 threads goes to partitions
+of 2^7 to 2^9 keys and to leaves (instrumented: about 60% of task time). That
+work is compute-bound and happens in cache, so a distribution pass can't remove
+it. On the 4P+4E laptop the E-cores make it worse.
+
+Two lessons for the code:
+- With a run-time bucket count, the branch-free search compiled to branches:
+  29 ns/key, 8 mispredictions per key. With a compile-time `Val(nb)` it takes
+  3.6 ns/key.
+- `foreach_range` runs serially below `PERM_PAR_MIN` elements, so it must not
+  be used to spread a handful of chunks over tasks (`foreach_chunk_index`).
+
+The step stays in the code but is off (`DIST_MINN = typemax(Int)`). The Idun
+run (`bench/idun/scaling.jl`) measures it at up to all cores of a many-core
+node, where the memory-bound top levels weigh more.
+
 ## 8. Other key types: windowed keys
 
 Everything that is not a plain 32/64-bit number goes through one mechanism
@@ -607,6 +648,84 @@ sorted. If more than $n/4$ symbols are distinct, they take the byte path.
 | Tuples, Pairs | fixed-width components packed big-endian into multi-word keys; otherwise one stable `sortperm` per component, last first |
 | `VersionNumber` | packed (major, minor, patch); ties with prerelease or build tags finished with `isless` |
 
+**`sort!` for wide fixed-width keys: one sample-sort step [IPS4o]**
+(`src/msd.jl`). Int128, UInt256 and other BitIntegers, Float128, Double64,
+MultiFloats, and packed tuples and pairs used to be sorted by computing the
+full permutation and then gathering `v[p]`. That is a random 16–32 byte access
+per element, about half the time. Now, above 2^16 elements:
+1. Sample 32 × 256 leading order words and sort them; every 32nd is a splitter.
+   Radix digits of the leading word would not do: random floats span the sign
+   bit and a few exponents, which put 10^7 `Float128`s into 4 non-empty buckets.
+   If the sample has fewer than 64 distinct leading words, the old path is used.
+2. Count, in parallel chunks, with a branch-free search over the 255 splitters,
+   storing each element's bucket as one byte.
+3. Scatter the values (only the values, not their keys) stably into a scratch
+   array, in parallel.
+4. Sort each bucket (about 40 000 elements, in cache) into `v`:
+   - one SIMD sort of 64-bit keys, made of the order-word bits just below the
+     bucket's common prefix plus the local position;
+   - a full comparison in the rare runs of equal windows, with the position as
+     tie-break (stable);
+   - scratch buffers reused across the buckets of a task, since fresh 0.6 MB
+     buffers were malloc'ed and page-faulted per bucket.
+
+Packed tuple keys of up to 128 bits are built with straight-line `UInt128`
+shifts. The general `putbits` loop indexes the word tuple at run time and was
+7× slower; that mattered here because the keys are computed three times.
+
+10^7 elements, seconds (old path → new; ChapelSort), interleaved, best of 3:
+
+| type | 1 thread | ChapelSort | 8 threads | ChapelSort |
+|---|---:|---:|---:|---:|
+| `Int128` | 0.42 → 0.18 | 0.27 | 0.18 → 0.049 | 0.068 |
+| `UInt256` | 0.52 → 0.28 | 0.34 | 0.21 → 0.081 | 0.093 |
+| `Float128` | 0.55 → 0.22 | 0.37 | 0.29 → 0.063 | 0.088 |
+| `Double64` | 0.54 → 0.27 | 0.75 | 0.33 → 0.075 | 0.185 |
+| `Float64x2` | 0.52 → 0.24 | 0.49 | 0.28 → 0.064 | 0.133 |
+| `Pair{Int32,Int64}` | 0.53 → 0.21 | 0.26 | 0.24 → 0.050 | 0.073 |
+| `Tuple{Int64,Float64}` | 0.54 → 0.23 | 0.51 | 0.24 → 0.059 | 0.126 |
+
+Getting there, step by step:
+- First version (radix digits, values and keys both scattered, 2048 buckets):
+  slower than the old path.
+- Scatter the values only: Int128 faster, floats not.
+- Splitters from a sample, and parallel count and scatter: faster than the old
+  path for every type.
+- Lean bucket sort with reused scratch: 1.5–2× faster again.
+
 The package types come through extensions (weak dependencies). DoubleFloats'
 `isless` is no total order with NaNs, so Base has no defined result there; NaNs
 go last.
+
+## 9. Instrumentation
+
+`src/instrument.jl` has optional phase timers and event counters. They are
+for machines where interactive profiling is impractical, such as cluster
+nodes (`bench/idun/`).
+
+```julia
+r = SIMDQuickSort.instrumented(() -> simdsort!(v; ntasks = 8))
+SIMDQuickSort.print_report(r)    # or r.phases, r.counters
+```
+
+When it is off (the default), a probe costs one load and a branch. Probes sit
+on coarse steps only: per pass, per partition call or leaf, never per key.
+
+What is recorded:
+- **Phases:** the key map, the counting, presorted and hash checks, the
+  quicksort; per partition size class `partition_2e<k>`; `pivot` and
+  `leaf_sort`; the MSD and distribution steps (`msd_*`, `dist_*`).
+- **Counters:** partition calls and keys per size class, three-way partitions,
+  depth-limit fallbacks, equal ranges, leaf calls and keys, hash attempts and
+  aborts, window sorts, spawned tasks, bucket counts and the largest bucket.
+
+How it is kept cheap and correct:
+- Accumulators are per thread, so concurrent tasks never wait on a lock. A
+  shared lock had inflated nested phase times at 8 threads.
+- The per-partition probes use fixed array slots, not Dict entries keyed by
+  constructed symbols. That version doubled the run time of a one-thread sort.
+- Below 2^12 keys only every 16th call is timed, and the time is scaled up.
+  Calls and keys are always counted exactly.
+
+The overhead is now under 10% of the wall time, and at one thread the phase
+times add up to the wall time. Phase times are task times summed over threads.

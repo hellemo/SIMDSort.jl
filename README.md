@@ -146,47 +146,50 @@ rounds:
 <!-- table:types -->
 | **case, operation**                   | **Base 1 thr** | **ChapelSort 1 thr** | **SIMDQuickSort 1 thr** | **ChapelSort 8 thr** | **SIMDQuickSort 8 thr** |
 |:--------------------------------------|---------------:|---------------------:|------------------------:|---------------------:|------------------------:|
-| String, random, length 8–20, sort     |          5.910 |                1.620 |               **0.825** |            **0.364** |                   0.413 |
-| String, random, length 8–20, sortperm |         14.980 |                1.944 |               **0.684** |                0.541 |               **0.219** |
-| String, h2o id3 (id%010d), sort       |          3.655 |            **1.328** |                   2.037 |            **0.390** |                   0.669 |
-| String, h2o id3 (id%010d), sortperm   |          8.643 |            **1.667** |                   1.796 |                0.578 |               **0.558** |
-| Symbol, 10^5 distinct, sort           |          1.174 |                0.303 |               **0.176** |            **0.062** |                   0.171 |
-| Symbol, 10^5 distinct, sortperm       |          3.762 |                0.519 |               **0.427** |            **0.238** |                   0.247 |
-| Int128, sort                          |          0.415 |            **0.293** |                   0.448 |            **0.071** |                   0.157 |
-| Int128, sortperm                      |          2.096 |                0.459 |               **0.250** |                0.112 |               **0.109** |
-| UInt256 (BitIntegers), sort           |          0.702 |            **0.371** |                   0.540 |            **0.092** |                   0.211 |
-| UInt256 (BitIntegers), sortperm       |          3.476 |                0.664 |               **0.247** |                0.176 |               **0.107** |
-| Double64 (DoubleFloats), sort         |          1.024 |                0.751 |               **0.550** |            **0.151** |                   0.271 |
-| Double64 (DoubleFloats), sortperm     |          2.678 |                0.556 |               **0.364** |            **0.153** |                   0.248 |
-| Float128 (Quadmath), sort             |          2.880 |            **0.426** |                   0.591 |            **0.102** |                   0.274 |
-| Float128 (Quadmath), sortperm         |          9.474 |                0.560 |               **0.361** |            **0.131** |                   0.219 |
-| Float64x2 (MultiFloats), sort         |          0.850 |                0.760 |               **0.484** |            **0.164** |                   0.267 |
-| Float64x2 (MultiFloats), sortperm     |          4.523 |                0.513 |               **0.318** |            **0.164** |                   0.199 |
-| Float64x4 (MultiFloats), sort         |          0.082 |                0.054 |               **0.027** |            **0.013** |                   0.016 |
-| Float64x4 (MultiFloats), sortperm     |          0.335 |                0.058 |               **0.016** |                0.016 |               **0.011** |
-| Date, sort                            |          0.225 |                0.084 |               **0.059** |                0.025 |               **0.020** |
-| Date, sortperm                        |          1.572 |            **0.141** |                   0.284 |            **0.043** |                   0.116 |
-| DateTime, sort                        |          0.273 |                0.208 |               **0.069** |                0.040 |               **0.023** |
-| DateTime, sortperm                    |          1.599 |                0.348 |               **0.256** |            **0.081** |                   0.106 |
-| Tuple{Int64,Float64}, sort            |          0.803 |                0.552 |               **0.537** |            **0.122** |                   0.208 |
-| Tuple{Int64,Float64}, sortperm        |          2.694 |                0.618 |               **0.347** |            **0.144** |                   0.145 |
-| Pair{Int32,Int64}, sort               |          0.474 |            **0.275** |                   0.532 |            **0.064** |                   0.211 |
-| Pair{Int32,Int64}, sortperm           |          2.324 |                0.452 |               **0.337** |            **0.116** |                   0.118 |
-| Tuple{Int64,String}, sort             |          0.708 |                0.473 |               **0.325** |            **0.143** |                   0.272 |
-| Tuple{Int64,String}, sortperm         |          1.718 |                0.363 |               **0.312** |            **0.132** |                   0.186 |
-| VersionNumber, sort                   |          0.149 |            **0.060** |                   0.064 |                0.044 |               **0.040** |
-| VersionNumber, sortperm               |          0.287 |            **0.047** |                   0.053 |            **0.028** |                   0.033 |
-| BigInt (\~128-384 bits), sort         |          0.480 |                0.190 |               **0.128** |            **0.099** |                   0.110 |
-| BigInt (\~128-384 bits), sortperm     |          1.141 |                0.210 |               **0.150** |                0.114 |               **0.112** |
-| BigFloat (256 bits), sort             |          0.550 |                0.229 |               **0.147** |            **0.090** |                   0.119 |
-| BigFloat (256 bits), sortperm         |          1.123 |                0.216 |               **0.144** |            **0.087** |                   0.112 |
+| String, random, length 8–20, sort     |          5.588 |                1.482 |               **0.794** |            **0.409** |                   0.412 |
+| String, random, length 8–20, sortperm |         13.790 |                1.796 |               **0.641** |                0.490 |               **0.215** |
+| String, h2o id3 (id%010d), sort       |          3.519 |            **1.270** |                   1.894 |            **0.416** |                   0.618 |
+| String, h2o id3 (id%010d), sortperm   |          8.217 |            **1.663** |                   1.753 |                0.616 |               **0.454** |
+| Symbol, 10^5 distinct, sort           |          1.132 |                0.298 |               **0.161** |            **0.063** |                   0.145 |
+| Symbol, 10^5 distinct, sortperm       |          3.709 |                0.509 |               **0.411** |            **0.234** |                   0.276 |
+| Int128, sort                          |          0.426 |                0.281 |               **0.198** |                0.074 |               **0.047** |
+| Int128, sortperm                      |          1.916 |                0.456 |               **0.242** |                0.109 |               **0.105** |
+| UInt256 (BitIntegers), sort           |          0.706 |                0.371 |               **0.279** |                0.100 |               **0.084** |
+| UInt256 (BitIntegers), sortperm       |          3.137 |                0.643 |               **0.251** |                0.150 |               **0.112** |
+| Double64 (DoubleFloats), sort         |          0.998 |                0.738 |               **0.285** |                0.152 |               **0.059** |
+| Double64 (DoubleFloats), sortperm     |          2.682 |                0.561 |               **0.354** |            **0.143** |                   0.236 |
+| Float128 (Quadmath), sort             |          2.816 |                0.398 |               **0.241** |                0.100 |               **0.069** |
+| Float128 (Quadmath), sortperm         |          8.838 |                0.523 |               **0.364** |            **0.133** |                   0.210 |
+| Float64x2 (MultiFloats), sort         |          0.827 |                0.746 |               **0.273** |                0.166 |               **0.065** |
+| Float64x2 (MultiFloats), sortperm     |          4.184 |                0.505 |               **0.296** |            **0.125** |                   0.172 |
+| Float64x4 (MultiFloats), sort         |          0.074 |                0.050 |               **0.030** |                0.013 |               **0.009** |
+| Float64x4 (MultiFloats), sortperm     |          0.386 |                0.063 |               **0.016** |                0.016 |               **0.012** |
+| Date, sort                            |          0.185 |                0.081 |               **0.053** |                0.025 |               **0.020** |
+| Date, sortperm                        |          1.638 |            **0.148** |                   0.261 |            **0.040** |                   0.111 |
+| DateTime, sort                        |          0.237 |                0.206 |               **0.068** |                0.041 |               **0.022** |
+| DateTime, sortperm                    |          1.542 |                0.368 |               **0.267** |            **0.077** |                   0.119 |
+| Tuple{Int64,Float64}, sort            |          0.744 |                0.541 |               **0.231** |                0.122 |               **0.057** |
+| Tuple{Int64,Float64}, sortperm        |          2.584 |                0.596 |               **0.345** |                0.152 |               **0.135** |
+| Pair{Int32,Int64}, sort               |          0.462 |                0.272 |               **0.200** |                0.076 |               **0.053** |
+| Pair{Int32,Int64}, sortperm           |          2.251 |                0.458 |               **0.283** |            **0.112** |                   0.114 |
+| Tuple{Int64,String}, sort             |          0.699 |                0.515 |               **0.337** |            **0.154** |                   0.209 |
+| Tuple{Int64,String}, sortperm         |          1.719 |                0.346 |               **0.296** |            **0.136** |                   0.193 |
+| VersionNumber, sort                   |          0.149 |            **0.061** |                   0.066 |                0.044 |               **0.040** |
+| VersionNumber, sortperm               |          0.297 |            **0.049** |                   0.053 |            **0.029** |                   0.034 |
+| BigInt (\~128-384 bits), sort         |          0.512 |                0.170 |               **0.148** |                0.108 |               **0.104** |
+| BigInt (\~128-384 bits), sortperm     |          1.088 |                0.214 |               **0.136** |            **0.104** |                   0.123 |
+| BigFloat (256 bits), sort             |          0.578 |                0.216 |               **0.150** |                0.104 |               **0.101** |
+| BigFloat (256 bits), sortperm         |          1.063 |                0.229 |               **0.142** |            **0.103** |                   0.109 |
 <!-- /table:types -->
 
 - **`sortperm`:** SIMDQuickSort wins most rows on one thread.
-- **`sort` for wide fixed-width types** (Int128, UInt256, Float128, Pair): it
-  sorts through a permutation, and applying the permutation costs more than
-  ChapelSort's in-place radix sort.
-- **8 threads:** ChapelSort's radix sort leads in most rows.
+- **`sort` for wide fixed-width types** (Int128, UInt256, Float128, Double64,
+  MultiFloats, packed tuples and pairs): one sample-sort distribution pass, then
+  cache-resident SIMD sorts of the buckets (docs/DESIGN.md §8). It used to go
+  through a permutation and a gather.
+- **8 threads:** SIMDQuickSort leads in 19 of 34 rows, including `sort` for
+  every fixed-width type. ChapelSort's radix sort leads in most 8-thread
+  `sortperm` rows and for strings and Symbols.
 
 ![sort speedup over Base](docs/types_sort.svg)
 
@@ -254,9 +257,11 @@ the source map at the top of `src/SIMDQuickSort.jl`):
   Integer Data on x86-64.* [arXiv:2605.25040](https://arxiv.org/abs/2605.25040),
   2026. Used for the Chao1 estimate of distinct keys and hash counting.
 
-Considered, not implemented (docs/DESIGN.md §7): IPS4o/IPS2Ra (Axtmann, Witt,
-Ferizovic, Sanders; ACM TOPC 2022,
-[arXiv:2009.13569](https://arxiv.org/abs/2009.13569)).
+- **[IPS4o]** M. Axtmann, S. Witt, D. Ferizovic, P. Sanders. *Engineering
+  in-place (shared-memory) sorting algorithms.* ACM TOPC, 2022.
+  [arXiv:2009.13569](https://arxiv.org/abs/2009.13569). Used for the
+  sample-sort distribution step in `sort!` for wide fixed-width types
+  (splitters from a sorted sample, branch-free bucket search).
 
 The implementation is written from these papers. It uses no code from Google
 Highway (vqsort), Intel's x86-simd-sort or F5.

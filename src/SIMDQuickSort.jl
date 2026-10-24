@@ -16,6 +16,7 @@ SIMD.jl. See `docs/DESIGN.md` for the algorithm and its sources.
 #                                                         perm.jl (common-prefix skip)
 #   [MBM93]  McIlroy, Bostic & McIlroy, radix sort (1993) perm.jl (MSD refinement)
 #   [CAFS]   Shlyk, cache-aware frequency sort (2026)     hashcount.jl
+#   [IPS4o]  Axtmann et al., in-place sample sort (2022)  msd.jl (sample-sort distribution)
 # Everything else (key maps, prefetch, three-way partition, parallel partition,
 # counting sort, windowed keys, string prefix cache, bignum encodings) is this
 # package's own design or textbook technique.

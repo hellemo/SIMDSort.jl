@@ -152,14 +152,8 @@ function qsort!(p::Ptr{T}, n::Int, buf::Ptr{T}, depth::Int, s::UInt64,
             return s
         end
         depth -= 1
-        pivot, dup, s = @phase :pivot choose_pivot(p, n, s, buf)
-        if INSTR[]
-            count!(:partition_calls)
-            dup && count!(:threeway_partitions)
-            count!(Symbol(:partition_keys_2e, sizeclass(n)), n)
-        end
-        a, b = @phase(Symbol(:partition_2e, sizeclass(n)),
-                      split!(p, n, pivot, dup, buf, (p, n, x) -> partition_auto!(p, n, x, buf)))
+        pivot, dup, s = @hotphase 1 n choose_pivot(p, n, s, buf)
+        a, b = @partphase(n, dup, split!(p, n, pivot, dup, buf, (p, n, x) -> partition_auto!(p, n, x, buf)))
         if a == n
             # Nothing above the pivot: it is the maximum. Done if all keys are
             # equal; otherwise split off the copies of the minimum.
@@ -185,11 +179,8 @@ function qsort!(p::Ptr{T}, n::Int, buf::Ptr{T}, depth::Int, s::UInt64,
             hi = pivot
         end
     end
-    if INSTR[]
-        count!(:leaf_calls)
-        count!(:leaf_keys, n)
-    end
-    @phase :leaf_sort leaf_sort!(p, n, buf, lo, hi)
+    count_leaf!(n)
+    @hotphase 2 n leaf_sort!(p, n, buf, lo, hi)
     return s
 end
 

@@ -89,7 +89,7 @@ function main()
             flush(stdout)
         end
     end
-    out = joinpath(@__DIR__, "results", "crossover.csv")
+    out = joinpath(get(ENV, "BENCH_RESULTS", joinpath(@__DIR__, "results")), "crossover.csv")
     mkpath(dirname(out))
     write_rows(out, "case,method,ntasks,n,best,median",
                [string("\"", r.case, "\",", r.method, ",", r.ntasks, ",", r.n, ",", r.best, ",", r.median)

@@ -86,7 +86,7 @@ function main()
     for (name, n, mkgen) in CASES
         run_case(name, n, mkgen)
     end
-    out = joinpath(@__DIR__, "results", "types.csv")
+    out = joinpath(get(ENV, "BENCH_RESULTS", joinpath(@__DIR__, "results")), "types.csv")
     mkpath(dirname(out))
     open(out, "w") do io
         println(io, "case,op,method,nthreads,n,best,median")
