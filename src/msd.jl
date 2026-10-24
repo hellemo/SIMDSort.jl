@@ -208,7 +208,7 @@ end
 # array; each bucket is then quicksorted on one thread and copied back while
 # in cache.
 
-const DIST_BUCKETS = Ref(256)
+const DIST_BUCKETS = 256          # bucket ids fit a UInt8
 const DIST_MINN = Ref(1 << 22)      # keys
 const DIST_MINTASKS = Ref(16)       # Xeon: wins from 16 threads, loses at 8
 
@@ -244,7 +244,7 @@ quicksorts. Returns `false` without changing anything if the sample has too
 few distinct keys for balanced buckets.
 """
 function distribute_sort!(p::Ptr{S}, n::Int, ntasks::Int) where {S}
-    nb = DIST_BUCKETS[]
+    nb = DIST_BUCKETS
     k = unsafe_wrap(Array, p, n)
     smp = Vector{S}(undef, nb * MSD_OVERSAMPLE)
     r = UInt64(n) | 1
@@ -261,7 +261,7 @@ function distribute_sort!(p::Ptr{S}, n::Int, ntasks::Int) where {S}
     counts = zeros(Int, nb, nc)
     arena = ScratchArena()
     try
-        bk = alloc!(arena, UInt16, n)
+        bk = alloc!(arena, UInt8, n)
         tv = alloc!(arena, S, n)
         @phase :dist_count begin
             tforeach_index(nc) do c
@@ -299,7 +299,7 @@ function dist_count!(counts, bk, k::Vector{S}, spl::Vector{S}, r, c, vnb::Val{nb
     cnt = zeros(Int, nb)
     @inbounds for i in r
         d = bucket_of_n(spl, k[i], vnb)
-        bk[i] = d % UInt16
+        bk[i] = d % UInt8
         cnt[d+1] += 1
     end
     @inbounds counts[:, c] .= cnt

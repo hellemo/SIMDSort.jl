@@ -191,14 +191,25 @@ end
 # the offsets x - lo, read as Float64 bit patterns, are finite non-negative
 # doubles in the same order as the integers (subnormals included, unless they are
 # flushed to zero), so the leaf can be sorted with the Float64 networks.
-# Decided when the code is compiled (SIMD.Targets is meant for generated code).
-@generated has_avx() = SIMD.Targets.has_feature(:avx)
-# AVX-512 (F + VL) has native 64-bit integer min/max (vpminsq/vpmaxsq), so the
-# double-domain detour for Int64 leaves is not needed there.
-@generated has_avx512() = SIMD.Targets.has_feature(:avx512f) && SIMD.Targets.has_feature(:avx512vl)
+# The CPU target, decided when the code is compiled (SIMD.Targets is meant for
+# generated code). AVX-512 (F + VL) has native 64-bit integer min/max
+# (vpminsq/vpmaxsq), so the double-domain detour for Int64 leaves is only for
+# AVX targets without it.
+struct AVX512Target end
+struct AVXTarget end
+struct GenericTarget end
+@generated function target()
+    SIMD.Targets.has_feature(:avx512f) && SIMD.Targets.has_feature(:avx512vl) && return :(AVX512Target())
+    SIMD.Targets.has_feature(:avx) && return :(AVXTarget())
+    return :(GenericTarget())
+end
+has_avx() = !(target() isa GenericTarget)
+has_avx512() = target() isa AVX512Target
+double_leaves(::AVXTarget) = true
+double_leaves(_) = false
 
 @inline function leaf_sort!(p::Ptr{Int64}, n::Int, buf::Ptr{Int64}, lo::Int64, hi::Int64)
-    if n > 8 && (hi - lo) % UInt64 < UInt64(1) << 62 && has_avx() && !has_avx512() &&
+    if double_leaves(target()) && n > 8 && (hi - lo) % UInt64 < UInt64(1) << 62 &&
             !get_zero_subnormals()
         small_sort_offsets!(p, n, buf, lo)
     else
@@ -261,13 +272,16 @@ function sort_keys!(p::Ptr{T}, n::Int, ntasks::Int=1) where {T}
 end
 
 """
-    presorted!(k, rev=false, ntasks=1) -> Bool
+    presorted!(k, order=Forward, ntasks=1) -> Bool
 
-Return `true` if `k` is sorted (in reverse if `rev`), after reversing it if it is
-in the opposite order. Both scans stop at the first key out of order, so random inputs cost
-almost nothing.
+Return `true` if `k` is sorted in `order`, after reversing it if it is in the
+opposite order. Both scans stop at the first key out of order, so random inputs
+cost almost nothing.
 """
-function presorted!(k::AbstractVector, rev::Bool=false, ntasks::Int=1)
+presorted!(k::AbstractVector, rev::Bool = false, ntasks::Int = 1) = presorted!(k, ordering(rev), ntasks)
+
+function presorted!(k::AbstractVector, o::Ord, ntasks::Int)
+    rev = isrev(o)
     if ntasks <= 1 || length(k) < PRESORTED_PAR_MIN
         issorted(k; rev) && return true
         if issorted(k; rev=!rev)
@@ -314,10 +328,10 @@ const COUNT_MINN = 1 << 12
 const COUNT_MARGIN = 32
 
 """
-    counting_sort!(v, rev, ntasks) -> Bool
+    counting_sort!(v, order, ntasks) -> Bool
 
 If the integers in `v` span a range of at most `COUNT_MAXRANGE` values and fewer
-than `length(v) ÷ 4`, sort `v` (in reverse if `rev`) by counting each value and
+than `length(v) ÷ 4`, sort `v` in `order` by counting each value and
 writing the runs, and return `true`. Otherwise leave `v` unchanged and return
 `false`. Works on the original values, so no key map is needed.
 
@@ -325,7 +339,7 @@ A sample of 1024 keys rejects wide ranges and sets up a count table over the
 sample's range plus a margin. Keys outside it go to an overflow slot; if any do,
 the table is redone over the exact range from a min/max scan.
 """
-function counting_sort!(v::Vector{T}, rev::Bool, ntasks::Int) where {T<:Integer}
+function counting_sort!(v::Vector{T}, o::Ord, ntasks::Int) where {T<:Integer}
     n = length(v)
     n < COUNT_MINN && return false
     # A sample's range is at most the full range, so a wide sample rejects early
@@ -352,7 +366,7 @@ function counting_sort!(v::Vector{T}, rev::Bool, ntasks::Int) where {T<:Integer}
     f = findfirst(!iszero, counts)
     l = findlast(!iszero, counts)
     (l - f <= COUNT_MAXRANGE && l - f < n ÷ 4) || return false
-    fill_runs!(v, view(counts, f:l), T(lo + f - 1), rev, ntasks)
+    fill_runs!(v, view(counts, f:l), T(lo + f - 1), o, ntasks)
     count!(:counting_sorts)
     return true
 end
@@ -386,12 +400,12 @@ function count_keys(v::Vector{T}, c::UnitRange{Int}, base::T, W::Int) where {T}
     return vec(sum(t; dims=2))
 end
 
-# Write counts[d] copies of first + (d - 1) for each d (descending if `rev`).
-# With several tasks, each fills an equal slice of `v`.
-function fill_runs!(v::Vector{T}, counts::AbstractVector{Int}, first::T, rev::Bool,
+# Write counts[d] copies of first + (d - 1) for each d (descending for
+# Reverse). With several tasks, each fills an equal slice of `v`.
+function fill_runs!(v::Vector{T}, counts::AbstractVector{Int}, first::T, o::Ord,
                     ntasks::Int) where {T}
     m = length(counts)
-    ord = rev ? (m:-1:1) : (1:m)
+    ord = runorder(o, m)
     starts = cumsum([1; [counts[d] for d in ord][1:end-1]])
     function fill_slice(a, b)
         j = searchsortedlast(starts, a)
@@ -410,3 +424,6 @@ function fill_runs!(v::Vector{T}, counts::AbstractVector{Int}, first::T, rev::Bo
     tforeach(r -> fill_slice(r.start, r.stop), length(v), ntasks; minlen = 0)
     return v
 end
+
+runorder(::Base.Order.ForwardOrdering, m::Int) = 1:m
+runorder(::Base.Order.ReverseOrdering, m::Int) = m:-1:1

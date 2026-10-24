@@ -15,45 +15,33 @@ signedkey(::Type{T}) where {T<:Union{Int64, UInt64, Float64}} = Int64
 @inline keymap(::Type{<:AbstractFloat}, k::S) where {S} =
     k ⊻ ((k >> (8 * sizeof(S) - 1)) >>> 1)
 
-function map_keys!(k::AbstractVector{S}, ::Type{T}, rev::Bool) where {S, T}
-    if rev
-        @inbounds @simd for i in eachindex(k)
-            k[i] = ~keymap(T, k[i])
-        end
-    else
-        @inbounds @simd for i in eachindex(k)
-            k[i] = keymap(T, k[i])
-        end
-    end
-    return k
-end
+# The sort direction as a type: Base's Forward and Reverse orderings. Public
+# functions take `rev::Bool` and convert once (`ordering`); everything below
+# dispatches on the ordering, so each direction gets its own specialized code.
+const Ord = Union{Base.Order.ForwardOrdering,Base.Order.ReverseOrdering{Base.Order.ForwardOrdering}}
+ordering(rev::Bool) = rev ? Base.Order.Reverse : Base.Order.Forward
+isrev(::Base.Order.ForwardOrdering) = false
+isrev(::Base.Order.ReverseOrdering) = true
 
-function unmap_keys!(k::AbstractVector{S}, ::Type{T}, rev::Bool) where {S, T}
-    if rev
-        @inbounds @simd for i in eachindex(k)
-            k[i] = keymap(T, ~k[i])
-        end
-    else
-        @inbounds @simd for i in eachindex(k)
-            k[i] = keymap(T, k[i])
-        end
-    end
-    return k
-end
+# Encode a value's bits as a signed key in the given order (complemented for
+# Reverse: an exact involution that reverses the order), and decode it again.
+@inline encodekey(::Type{T}, ::Base.Order.ForwardOrdering, k) where {T} = keymap(T, k)
+@inline encodekey(::Type{T}, ::Base.Order.ReverseOrdering, k) where {T} = ~keymap(T, k)
+@inline decodekey(::Type{T}, ::Base.Order.ForwardOrdering, k) where {T} = keymap(T, k)
+@inline decodekey(::Type{T}, ::Base.Order.ReverseOrdering, k) where {T} = keymap(T, ~k)
 
-function complement!(k::AbstractVector{<:Unsigned})
+# k[i] = f(k[i]) for all i (vectorizes for simple f).
+function mapkeys!(f::F, k::AbstractVector) where {F}
     @inbounds @simd for i in eachindex(k)
-        k[i] = ~k[i]
+        k[i] = f(k[i])
     end
     return k
 end
 
-function negate!(k::AbstractVector{<:AbstractFloat})
-    @inbounds @simd for i in eachindex(k)
-        k[i] = -k[i]
-    end
-    return k
-end
+map_keys!(k::AbstractVector, ::Type{T}, o::Ord) where {T} = mapkeys!(x -> encodekey(T, o, x), k)
+unmap_keys!(k::AbstractVector, ::Type{T}, o::Ord) where {T} = mapkeys!(x -> decodekey(T, o, x), k)
+map_keys!(k::AbstractVector, ::Type{T}, rev::Bool) where {T} = map_keys!(k, T, ordering(rev))
+unmap_keys!(k::AbstractVector, ::Type{T}, rev::Bool) where {T} = unmap_keys!(k, T, ordering(rev))
 
 # Counts of NaNs, -0.0s and +0.0s in `k`, from the bit patterns (vectorizes), by
 # up to `ntasks` concurrent tasks.
@@ -95,34 +83,33 @@ foreach_chunk(f!::F, k::AbstractVector, ntasks::Integer) where {F} =
     tforeach(r -> f!(view(k, r)), length(k), ntasks; minlen = 1 << 16)
 
 """
-    nan_partition!(v, rev) -> UnitRange
+    nan_partition!(v, order) -> UnitRange
 
-Move all NaNs to the end of `v` (the front if `rev`), where `isless` puts them, and
-return the index range of the remaining values.
+Move all NaNs to the end of `v` (the front for Reverse), where `isless` puts
+them, and return the index range of the remaining values.
 """
-function nan_partition!(v::AbstractVector{<:AbstractFloat}, rev::Bool)
-    lo, hi = firstindex(v), lastindex(v)
-    if rev
-        j = lo
-        @inbounds for i in lo:hi
-            x = v[i]
-            if isnan(x)
-                v[i] = v[j]
-                v[j] = x
-                j += 1
-            end
+function nan_partition!(v::AbstractVector{<:AbstractFloat}, ::Base.Order.ForwardOrdering)
+    lo, j = firstindex(v), lastindex(v)
+    @inbounds for i in j:-1:lo
+        x = v[i]
+        if isnan(x)
+            v[i] = v[j]
+            v[j] = x
+            j -= 1
         end
-        return j:hi
-    else
-        j = hi
-        @inbounds for i in hi:-1:lo
-            x = v[i]
-            if isnan(x)
-                v[i] = v[j]
-                v[j] = x
-                j -= 1
-            end
-        end
-        return lo:j
     end
+    return lo:j
+end
+
+function nan_partition!(v::AbstractVector{<:AbstractFloat}, ::Base.Order.ReverseOrdering)
+    j, hi = firstindex(v), lastindex(v)
+    @inbounds for i in j:hi
+        x = v[i]
+        if isnan(x)
+            v[i] = v[j]
+            v[j] = x
+            j += 1
+        end
+    end
+    return j:hi
 end

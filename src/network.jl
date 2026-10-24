@@ -185,8 +185,10 @@ end
 # Compared with the bitonic merges of network_body this needs about 14% fewer
 # min/max and no blends.
 
-# Switch for experiments (read when a network is generated).
-const ZIGZAG = Ref(true)
+# Zigzag merges for the networks (false: Batcher merges); a constant because a
+# generated function must not read mutable state. bench/measure/tune.jl
+# measures the alternative by rewriting this line.
+const ZIGZAG = true
 
 function batcher_merge_pairs(n::Int)          # the last level (p = n/2) of Batcher
     pairs = Tuple{Int,Int}[]
@@ -390,7 +392,7 @@ register by register. `R` must be a power-of-two multiple of `N`.
     # The 16-row (and smaller) networks use zigzag merges; the 32-row ones are
     # two zigzag halves joined by halves_body.
     body = split ? halves_body(R, N) :
-           (R >= 2 && iseven(R) && R >= N ÷ 2 && ZIGZAG[]) ? zigzag_body(R, N) : network_body(R, N)
+           (R >= 2 && iseven(R) && R >= N ÷ 2 && ZIGZAG) ? zigzag_body(R, N) : network_body(R, N)
     # Inline: a call would pass all R vectors through memory.
     return Expr(:block, Expr(:meta, :inline), body)
 end

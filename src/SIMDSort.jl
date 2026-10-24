@@ -58,56 +58,69 @@ function simdsort!(v::AbstractVector; rev::Bool=false, ntasks::Integer=1)
 end
 
 function simdsort!(v::Vector{T}; rev::Bool=false, ntasks::Integer=1) where {T<:SortTypes}
-    n = length(v)
-    n <= 1 && return v
-    @phase(:counting_check, counting_sort!(v, rev, Int(ntasks))) && return v
+    length(v) <= 1 && return v
+    return sort_primitive!(keyclass(T), v, ordering(rev), Int(ntasks))
+end
+
+# How the six primitive types are sorted. Each class keeps its own (measured)
+# order of the cheap checks for special inputs.
+struct MappedKeys end       # Int32, Int64, UInt64: mapped to signed keys
+struct NativeKeys end       # UInt32: sorted as is
+struct FloatKeys end        # Float32, Float64: sorted as floats
+keyclass(::Type{<:Union{Int32,Int64,UInt64}}) = MappedKeys()
+keyclass(::Type{UInt32}) = NativeKeys()
+keyclass(::Type{<:Union{Float32,Float64}}) = FloatKeys()
+
+# Integers are mapped to signed keys of the same width (an order-preserving
+# involution on the bits, complemented for Reverse), sorted, and mapped back.
+function sort_primitive!(::MappedKeys, v::Vector{T}, o::Ord, nt::Int) where {T}
+    @phase(:counting_check, counting_sort!(v, o, nt)) && return v
     # Check for sorted input before the key map, which preserves the order.
-    @phase(:presorted_check, presorted!(v, rev, Int(ntasks))) && return v
-    @phase(:hash_check, hash_count_sort!(v, rev, Int(ntasks))) && return v
+    @phase(:presorted_check, presorted!(v, o, nt)) && return v
+    @phase(:hash_check, hash_count_sort!(v, o, nt)) && return v
+    n = length(v)
     S = signedkey(T)
     GC.@preserve v begin
         p = Ptr{S}(pointer(v))
         k = unsafe_wrap(Array, p, n)
-        @phase :keymap foreach_chunk(k -> map_keys!(k, T, rev), k, ntasks)
-        sort_auto!(p, n, Int(ntasks))
-        @phase :keyunmap foreach_chunk(k -> unmap_keys!(k, T, rev), k, ntasks)
+        @phase :keymap foreach_chunk(c -> map_keys!(c, T, o), k, nt)
+        sort_auto!(p, n, nt)
+        @phase :keyunmap foreach_chunk(c -> unmap_keys!(c, T, o), k, nt)
     end
     return v
 end
 
 # UInt32 keys are sorted as they are: AVX2 has unsigned 32-bit min/max, so the
-# kernels need no key map. `rev` complements the values (an exact involution that
-# reverses the unsigned order). UInt64 keeps the map: without unsigned 64-bit
-# min/max, native kernels cost as much as the two map passes save.
-function simdsort!(v::Vector{UInt32}; rev::Bool=false, ntasks::Integer=1)
-    n = length(v)
-    n <= 1 && return v
-    @phase(:counting_check, counting_sort!(v, rev, Int(ntasks))) && return v
-    @phase(:hash_check, hash_count_sort!(v, rev, Int(ntasks))) && return v
-    rev && foreach_chunk(complement!, v, ntasks)
-    GC.@preserve v (@phase(:presorted_check, presorted!(v, false, Int(ntasks))) ||
-                    sort_auto!(pointer(v), n, Int(ntasks)))
-    rev && foreach_chunk(complement!, v, ntasks)
+# kernels need no key map. Reverse complements the values (an exact involution
+# that reverses the unsigned order). UInt64 keeps the map: without unsigned
+# 64-bit min/max, native kernels cost as much as the two map passes save.
+function sort_primitive!(::NativeKeys, v::Vector{T}, o::Ord, nt::Int) where {T}
+    @phase(:counting_check, counting_sort!(v, o, nt)) && return v
+    @phase(:hash_check, hash_count_sort!(v, o, nt)) && return v
+    isrev(o) && foreach_chunk(c -> mapkeys!(~, c), v, nt)
+    GC.@preserve v (@phase(:presorted_check, presorted!(v, Base.Order.Forward, nt)) ||
+                    sort_auto!(pointer(v), length(v), nt))
+    isrev(o) && foreach_chunk(c -> mapkeys!(~, c), v, nt)
     return v
 end
 
-# Floats are sorted as floats: NaNs are moved out first, `rev` negates the values
-# (an exact involution), and since compares treat -0.0 == 0.0, the run of zeros
-# is rewritten in `isless` order afterwards from a count of the -0.0s.
-function simdsort!(v::Vector{T}; rev::Bool=false, ntasks::Integer=1) where {T<:Union{Float32,Float64}}
-    nnan, nneg, npos = @phase :float_scan float_scan(v, ntasks)
-    r = nnan == 0 ? eachindex(v) : @phase(:nan_partition, nan_partition!(v, rev))
+# Floats are sorted as floats: NaNs are moved out first, Reverse negates the
+# values (an exact involution), and since compares treat -0.0 == 0.0, the run of
+# zeros is rewritten in `isless` order afterwards from a count of the -0.0s.
+function sort_primitive!(::FloatKeys, v::Vector{T}, o::Ord, nt::Int) where {T}
+    nnan, nneg, npos = @phase :float_scan float_scan(v, nt)
+    r = nnan == 0 ? eachindex(v) : @phase(:nan_partition, nan_partition!(v, o))
     n = length(r)
     n <= 1 && return v
     GC.@preserve v begin
         p = pointer(v, first(r))
         k = unsafe_wrap(Array, p, n)
-        @phase(:hash_check, hash_count_sort!(k, rev, Int(ntasks))) && return v
-        rev && foreach_chunk(negate!, k, ntasks)
-        @phase(:presorted_check, presorted!(k, false, Int(ntasks))) || sort_auto!(p, n, Int(ntasks))
-        # After negation (rev) the +0.0s of the input are the -0.0s.
-        @phase :order_zeros order_zeros!(k, rev ? npos : nneg)
-        rev && foreach_chunk(negate!, k, ntasks)
+        @phase(:hash_check, hash_count_sort!(k, o, nt)) && return v
+        isrev(o) && foreach_chunk(c -> mapkeys!(-, c), k, nt)
+        @phase(:presorted_check, presorted!(k, Base.Order.Forward, nt)) || sort_auto!(p, n, nt)
+        # After negation (Reverse) the +0.0s of the input are the -0.0s.
+        @phase :order_zeros order_zeros!(k, isrev(o) ? npos : nneg)
+        isrev(o) && foreach_chunk(c -> mapkeys!(-, c), k, nt)
     end
     return v
 end

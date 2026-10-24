@@ -74,13 +74,13 @@ function count_into!(t::CountTable{U}, k::AbstractVector{U}, r::UnitRange{Int}) 
 end
 
 """
-    hash_count_sort!(v, rev, ntasks) -> Bool
+    hash_count_sort!(v, order, ntasks) -> Bool
 
 Sort `v` by counting its distinct values in a hash table if a sample suggests
 there are few of them (at most `HASH_MAXK`); return `false`, leaving `v`
 unchanged, otherwise.
 """
-function hash_count_sort!(v::Vector{T}, rev::Bool, ntasks::Int) where {T<:SortTypes}
+function hash_count_sort!(v::Vector{T}, o::Ord, ntasks::Int) where {T<:SortTypes}
     n = length(v)
     n < HASH_MINN && return false
     U = unsigned(signedkey(T))
@@ -105,7 +105,7 @@ function hash_count_sort!(v::Vector{T}, rev::Bool, ntasks::Int) where {T<:SortTy
     end
     vals = T[reinterpret(T, x) for x in keys(total)]
     cnts = [total[reinterpret(U, x)] for x in vals]
-    p = sortperm(vals; rev)
+    p = sortperm(vals; rev = isrev(o))
     # (New names: the closure below must not capture reassigned variables.)
     svals, scnts = vals[p], cnts[p]
     # Write the runs, by up to ntasks tasks over equal slices of v.
