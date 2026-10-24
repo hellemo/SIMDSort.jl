@@ -344,6 +344,37 @@ end
         end
     end
 
+    @testset "parallel presorted check" begin
+        n = 2^20 + 7
+        for T in (Int64, UInt32, Float64), nt in (1, 3, 8), rev in (false, true)
+            base = sort(T <: AbstractFloat ? randn(rng, n) : rand(rng, T, n))
+            cases = Any[copy(base), reverse(base), fill(base[1], n)]
+            # One key out of order at a chunk border, and in the middle of a chunk.
+            for pos in unique(min.((cld(n, nt) + 1, n ÷ 2 + 3), n))
+                v = copy(base); v[pos], v[pos-1] = v[pos-1], v[pos]
+                v[pos] != v[pos-1] && push!(cases, v)
+                w = reverse(base); w[pos], w[pos-1] = w[pos-1], w[pos]
+                w[pos] != w[pos-1] && push!(cases, w)
+            end
+            push!(cases, sort(rand(rng, T(0):T(3), n)))
+            for v in cases
+                @test isequal(simdsort(v; rev, ntasks = nt), sort(v; rev))
+            end
+        end
+    end
+
+    @testset "ntasks bounds the concurrent tasks" begin
+        # Peak number of tasks inside the leaf sorts at once, from a probe
+        # wrapped around the sort of a large array.
+        n = 2^22
+        for nt in (1, 2, 3)
+            v = rand(rng, Int64, n)
+            r = SIMDSort.instrumented(() -> simdsort!(v; ntasks = nt))
+            @test issorted(v)
+            @test get(r.counters, :concurrent_tasks_max, 1) <= nt
+        end
+    end
+
     @testset "instrumentation" begin
         r = SIMDSort.instrumented(() -> simdsort!(rand(rng, Int128, 10^5); ntasks = 4))
         @test issorted(r.result)

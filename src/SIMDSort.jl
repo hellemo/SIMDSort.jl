@@ -60,7 +60,7 @@ function simdsort!(v::Vector{T}; rev::Bool=false, ntasks::Integer=1) where {T<:S
     n <= 1 && return v
     @phase(:counting_check, counting_sort!(v, rev, Int(ntasks))) && return v
     # Check for sorted input before the key map, which preserves the order.
-    @phase(:presorted_check, presorted!(v, rev)) && return v
+    @phase(:presorted_check, presorted!(v, rev, Int(ntasks))) && return v
     @phase(:hash_check, hash_count_sort!(v, rev, Int(ntasks))) && return v
     S = signedkey(T)
     GC.@preserve v begin
@@ -84,7 +84,7 @@ function simdsort!(v::Vector{UInt32}; rev::Bool=false, ntasks::Integer=1)
     @phase(:counting_check, counting_sort!(v, rev, Int(ntasks))) && return v
     @phase(:hash_check, hash_count_sort!(v, rev, Int(ntasks))) && return v
     rev && foreach_chunk(complement!, v, ntasks)
-    GC.@preserve v (@phase(:presorted_check, presorted!(v)) ||
+    GC.@preserve v (@phase(:presorted_check, presorted!(v, false, Int(ntasks))) ||
                     @phase(:quicksort, sort_keys!(pointer(v), n, Int(ntasks))))
     rev && foreach_chunk(complement!, v, ntasks)
     return v
@@ -103,7 +103,7 @@ function simdsort!(v::Vector{T}; rev::Bool=false, ntasks::Integer=1) where {T<:U
         k = unsafe_wrap(Array, p, n)
         @phase(:hash_check, hash_count_sort!(k, rev, Int(ntasks))) && return v
         rev && foreach_chunk(negate!, k, ntasks)
-        @phase(:presorted_check, presorted!(k)) || @phase(:quicksort, sort_keys!(p, n, Int(ntasks)))
+        @phase(:presorted_check, presorted!(k, false, Int(ntasks))) || @phase(:quicksort, sort_keys!(p, n, Int(ntasks)))
         # After negation (rev) the +0.0s of the input are the -0.0s.
         @phase :order_zeros order_zeros!(k, rev ? npos : nneg)
         rev && foreach_chunk(negate!, k, ntasks)

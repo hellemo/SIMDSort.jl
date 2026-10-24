@@ -261,19 +261,54 @@ function sort_keys!(p::Ptr{T}, n::Int, ntasks::Int=1) where {T}
 end
 
 """
-    presorted!(k, rev=false) -> Bool
+    presorted!(k, rev=false, ntasks=1) -> Bool
 
 Return `true` if `k` is sorted (in reverse if `rev`), after reversing it if it is
 in the opposite order. Both scans stop at the first key out of order, so random inputs cost
 almost nothing.
 """
-function presorted!(k::AbstractVector, rev::Bool=false)
-    issorted(k; rev) && return true
-    if issorted(k; rev=!rev)
-        reverse!(k)
+function presorted!(k::AbstractVector, rev::Bool=false, ntasks::Int=1)
+    if ntasks <= 1 || length(k) < PRESORTED_PAR_MIN
+        issorted(k; rev) && return true
+        if issorted(k; rev=!rev)
+            reverse!(k)
+            return true
+        end
+        return false
+    end
+    # In parallel: a single thread reads only about 13 GB/s on a server core,
+    # so a serial scan of sorted input cost the same at every thread count.
+    psorted(k, rev, ntasks) && return true
+    if psorted(k, !rev, ntasks)
+        preverse!(k, ntasks)
         return true
     end
     return false
+end
+
+const PRESORTED_PAR_MIN = 1 << 20
+
+# issorted in ntasks chunks that overlap by one key (every chunk stops at its
+# first key out of order, so random input still costs almost nothing).
+function psorted(k::AbstractVector, rev::Bool, ntasks::Int)
+    n = length(k)
+    chunks = collect(Iterators.partition(1:n, cld(n, ntasks)))
+    res = Vector{Bool}(undef, length(chunks))
+    @sync for (i, c) in enumerate(chunks)
+        Threads.@spawn res[i] = issorted(view(k, first(c):min(last(c) + 1, n)); rev)
+    end
+    return all(res)
+end
+
+function preverse!(k::AbstractVector, ntasks::Int)
+    n = length(k)
+    h = n ÷ 2
+    @sync for c in Iterators.partition(1:h, cld(h, ntasks))
+        Threads.@spawn @inbounds for i in c
+            k[i], k[n+1-i] = k[n+1-i], k[i]
+        end
+    end
+    return k
 end
 
 # Key ranges up to this size (and below n/4) are sorted by counting.

@@ -126,21 +126,23 @@ function sort_by_words!(v::Vector{T}, f::F, rev::Bool, ntasks::Int) where {T,F}
     if ntasks <= 1
         finish_buckets!(v, tv, bstart, 1:nb, f, rev, bmax)
     else
-        # Groups of buckets of about equal size, several per task.
+        # Groups of buckets of about equal size, several per task, at most
+        # ntasks running at a time.
         target = cld(n, 8ntasks)
-        @sync begin
-            b = 1
-            while b <= nb
-                g, sz = b, 0
-                while g <= nb && (sz == 0 || sz + bstart[g+1] - bstart[g] <= target)
-                    sz += bstart[g+1] - bstart[g]
-                    g += 1
-                end
-                bs = b:g-1
-                Threads.@spawn finish_buckets!(v, tv, bstart, $bs, f, rev, bmax)
-                b = g
+        sem = Base.Semaphore(ntasks)
+        tasks = Task[]
+        b = 1
+        while b <= nb
+            g, sz = b, 0
+            while g <= nb && (sz == 0 || sz + bstart[g+1] - bstart[g] <= target)
+                sz += bstart[g+1] - bstart[g]
+                g += 1
             end
+            bs = b:g-1
+            push!(tasks, spawn_limited(() -> finish_buckets!(v, tv, bstart, bs, f, rev, bmax), sem))
+            b = g
         end
+        foreach(wait, tasks)
     end
     INSTR[] && record_phase!(:msd_finish, time_ns() - tf)
     return v
@@ -300,18 +302,20 @@ function distribute_sort!(p::Ptr{S}, n::Int, ntasks::Int) where {S}
     INSTR[] && record_phase!(:dist_scatter, time_ns() - ts)
     tf = INSTR[] ? time_ns() : 0
     target = cld(n, 8ntasks)
-    @sync begin
-        b = 1
-        while b <= nb
-            g, sz = b, 0
-            while g <= nb && (sz == 0 || sz + bstart[g+1] - bstart[g] <= target)
-                sz += bstart[g+1] - bstart[g]
-                g += 1
-            end
-            Threads.@spawn dist_finish!(k, tv, bstart, $(b:g-1))
-            b = g
+    sem = Base.Semaphore(ntasks)
+    tasks = Task[]
+    b = 1
+    while b <= nb
+        g, sz = b, 0
+        while g <= nb && (sz == 0 || sz + bstart[g+1] - bstart[g] <= target)
+            sz += bstart[g+1] - bstart[g]
+            g += 1
         end
+        bs = b:g-1
+        push!(tasks, spawn_limited(() -> dist_finish!(k, tv, bstart, bs), sem))
+        b = g
     end
+    foreach(wait, tasks)
     INSTR[] && record_phase!(:dist_finish, time_ns() - tf)
     return true
 end

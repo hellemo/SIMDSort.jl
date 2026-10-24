@@ -253,21 +253,24 @@ function refine!(ks::KeySource, perm::AbstractVector{Int}, off::Int, ntasks::Int
         # Groups of runs of about equal total size, one task each.
         total = sum(length, runs)
         target = cld(total, 4ntasks)
-        @sync begin
-            g = 1
-            while g <= length(runs)
-                h, s = g, 0
-                while h <= length(runs) && (s == 0 || s + length(runs[h]) <= target)
-                    s += length(runs[h])
-                    h += 1
-                end
-                group = runs[g:h-1]
-                Threads.@spawn for r in $group
+        sem = Base.Semaphore(ntasks)
+        tasks = Task[]
+        g = 1
+        while g <= length(runs)
+            h, s = g, 0
+            while h <= length(runs) && (s == 0 || s + length(runs[h]) <= target)
+                s += length(runs[h])
+                h += 1
+            end
+            group = runs[g:h-1]
+            push!(tasks, spawn_limited(sem) do
+                for r in group
                     refine!(ks, view(perm, r), next, 1, sub(r))
                 end
-                g = h
-            end
+            end)
+            g = h
         end
+        foreach(wait, tasks)
     end
     return perm
 end

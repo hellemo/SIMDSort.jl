@@ -3,6 +3,23 @@
 
 scratch(::Type{T}) where {T} = Vector{T}(undef, max(basecase_max(T), (2UNROLL + 1) * lanes(T)))
 
+# At most `ntasks` tasks of one sort run at a time, as `simdsort!` promises.
+# Julia's scheduler runs a spawned task on any of its threads, so without this
+# `ntasks = 2` in a 56-thread Julia used all 56 cores. A task takes a slot of
+# the semaphore before it starts working; tasks waiting for a slot hold no
+# thread. (The tasks of `ppartition!` are not counted: one per share of
+# `ntasks`, while their parent waits.)
+spawn_limited(f, sem::Base.Semaphore) = Threads.@spawn begin
+    Base.acquire(sem)
+    enter_task!()
+    try
+        f()
+    finally
+        leave_task!()
+        Base.release(sem)
+    end
+end
+
 # Ranges above this size may be sorted by a separate task.
 const PAR_MIN = 1 << 16
 # Ranges above this size are partitioned in parallel.
@@ -102,15 +119,26 @@ end
 const GRAIN_FACTOR = 16
 
 """
-    pqsort!(p, n, depth, s, ntasks, total)
+    pqsort!(p, n, depth, s, ntasks, total, sem)
 
 Like `qsort!`, but while a range is larger than the grain
 `max(PAR_MIN, total ÷ (GRAIN_FACTOR * ntasks))` the smaller side of each
 partition is sorted by a new task. Ranges larger than `PPART_MIN` are
 partitioned with `ppartition!`, by as many tasks as their share
 `ntasks * n / total`. Waits for all tasks it started.
+
+The caller holds a slot of `sem` (`ntasks` slots); `pqsort!` gives it back
+before waiting for its tasks, each of which takes its own.
 """
 function pqsort!(p::Ptr{T}, n::Int, depth::Int, s::UInt64, ntasks::Int, total::Int) where {T}
+    sem = Base.Semaphore(ntasks)
+    Base.acquire(sem)
+    enter_task!()
+    return pqsort!(p, n, depth, s, ntasks, total, sem)
+end
+
+function pqsort!(p::Ptr{T}, n::Int, depth::Int, s::UInt64, ntasks::Int, total::Int,
+                 sem::Base.Semaphore) where {T}
     buf = scratch(T)
     tasks = Task[]
     alldone = false
@@ -149,11 +177,17 @@ function pqsort!(p::Ptr{T}, n::Int, depth::Int, s::UInt64, ntasks::Int, total::I
             ps, pl, nl = a <= n - b ? (p, p + b * sizeof(T), n - b) : (p + b * sizeof(T), p, a)
             s = xorshift(s)
             count!(:spawned_tasks)
-            push!(tasks, Threads.@spawn pqsort!($ps, $small, $depth, $s, $ntasks, $total))
+            push!(tasks, Threads.@spawn begin
+                Base.acquire($sem)
+                enter_task!()
+                pqsort!($ps, $small, $depth, $s, $ntasks, $total, $sem)
+            end)
             p, n = pl, nl
         end
         alldone || qsort!(p, n, pointer(buf), depth, s)
     end
+    leave_task!()
+    Base.release(sem)
     foreach(wait, tasks)
     return nothing
 end

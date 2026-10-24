@@ -129,6 +129,16 @@ end
     return nothing
 end
 
+# Tasks of a sort that hold a slot of its semaphore (src/parallel.jl), for the
+# counter concurrent_tasks_max: checks that ntasks bounds the parallelism.
+const ACTIVE_TASKS = Threads.Atomic{Int}(0)
+@inline function enter_task!()
+    INSTR[] || return nothing
+    countmax!(:concurrent_tasks_max, Threads.atomic_add!(ACTIVE_TASKS, 1) + 1)
+    return nothing
+end
+@inline leave_task!() = (INSTR[] && Threads.atomic_sub!(ACTIVE_TASKS, 1); nothing)
+
 # Maxima rather than sums (e.g. the largest bucket).
 function countmax!(name::Symbol, n::Integer)
     INSTR[] || return nothing
@@ -167,6 +177,7 @@ Run `f()` with instrumentation on; return `(; result, wall, phases, counters)`:
 function instrumented(f)
     empty!(ACCS)
     append!(ACCS, [Acc() for _ in 1:Threads.maxthreadid()])
+    ACTIVE_TASKS[] = 0
     INSTR[] = true
     t0 = time_ns()
     result = try
