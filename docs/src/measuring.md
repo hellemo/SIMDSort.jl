@@ -24,7 +24,8 @@ more than 2%, and it is rerun alone (`AB_ONLY`) before acting on it.
 
 `env.jl` (features and code paths), `codegen.jl` (machine code of the hot
 kernels), `instrument.jl` (phase times and counters), `scaling.jl` (thread
-scaling, with the sample-sort top level forced on and off) and `tune.jl`
+scaling, with the sample-sort top level forced on and off), `distcross.jl`
+(the crossover of the two top levels over size and tasks) and `tune.jl`
 (each tuning constant changed alone), in a lean environment without plotting
 packages. See [AVX-512](avx512.md) for what each answers.
 
