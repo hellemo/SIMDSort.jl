@@ -1,6 +1,6 @@
 # Measurements for AVX-512 machines (e.g. an NTNU Idun node); see docs/AVX512.md.
 #
-#   julia -t <n> --project=bench bench/avx512.jl [part|net|sort|all]
+#   julia -t <n> --project=bench bench/avx512.jl [part|net|sort|wide|all]
 #
 # 1. part: our partition step (vpartition: permutation table + vpermd, also on
 #    AVX-512) against a Bramas-style step with native compress (vcompress for
@@ -10,6 +10,13 @@
 #    including the loads and stores of the register matrix).
 # 3. sort: full sorts against x86-simd-sort and Highway vqsort (rebuild the shim
 #    on the node: ChapelSort.jl/bench/simd/build.sh uses -march=native).
+# 4. wide: the 512-bit experiment. SIMDSort uses 256-bit vectors everywhere;
+#    vqsort and x86-simd-sort use 512 bits on AVX-512. Kernels at both widths,
+#    per key: the partition step (256-bit table / 256-bit compress / 512-bit
+#    compress) and the base-case networks (256-bit 32 rows / 512-bit 16 and 32
+#    rows). Worth a full 512-bit path if the 512-bit kernels are clearly
+#    (~1.4x) faster despite the AVX-512 clock reduction. Writes
+#    $OUT/avx512_wide.csv.
 
 using SIMDSort, SIMD, Libdl, Printf, Random, Statistics
 const Q = SIMDSort
@@ -149,5 +156,90 @@ if what in ("sort", "all")
             end
         end
         println("  ", rpad(T, 8), join([@sprintf("%s %.3f", k, minimum(ts[k])) for (k, _) in fs], " | "))
+    end
+end
+
+# --- 4. 512-bit experiment -------------------------------------------------------
+
+# ns/key of one kernel pass with N lanes (part_loop!, out of place).
+function part_cost_n(::Type{T}, n, kernel, N) where {T}
+    a = T <: AbstractFloat ? T.(randn(n)) : rand(T, n)
+    tmp = Vector{T}(undef, n + 2N)
+    reps = max(1, 2^24 ÷ n)
+    f = kernel === :compress ? Q.part1_compress : Q.part1
+    run() = GC.@preserve a tmp Base.invokelatest(Q.part_loop!, f, pointer(a), pointer(tmp), n, Val(N))
+    run()
+    best = minimum(1:5) do _
+        @elapsed for _ in 1:reps
+            run()
+        end
+    end
+    return best / reps / n * 1e9
+end
+
+# ns/key of the R-row network with N lanes (net_loop!: load, sort, store).
+function net_cost_n(::Type{T}, R, N) where {T}
+    M = max(256, 2^20 ÷ (R * N))
+    a = T <: AbstractFloat ? T.(randn(R * N * M)) : rand(T, R * N * M)
+    run(b) = GC.@preserve b Base.invokelatest(Q.net_loop!, Q.net_single, pointer(b), M, Val(R), Val(N))
+    run(copy(a))
+    return minimum(_ -> (b = copy(a); @elapsed run(b)), 1:7) / (M * R * N) * 1e9
+end
+
+# The 512-bit kernels must give correct results on this CPU before they are timed.
+function check_wide(::Type{T}, N) where {T}
+    a = T <: AbstractFloat ? T.(randn(N * 64)) : rand(T, N * 64)
+    pv = Vec{N,T}(zero(T))
+    for i in 0:N:length(a)-N
+        x = Q.vld(Val(N), pointer(a), i)
+        m = x <= pv
+        c = count(m)
+        y = vcompress(x, m)
+        lanes = [x[j] for j in 1:N]
+        [y[j] for j in 1:c] == lanes[lanes .<= zero(T)] || return false
+    end
+    for R in (16, 32)
+        b = a[1:R*N]
+        vs = ntuple(r -> Vec{N,T}(Tuple(b[(r-1)*N+1:r*N])), R)
+        out = Base.invokelatest(Q.net_single, vs)
+        flat = sort([out[r][c] for r in 1:R for c in 1:N])
+        flat == sort(b) || return false
+        rows = [out[r][c] for r in 1:R for c in 1:N]; cols = [out[r][c] for c in 1:N for r in 1:R]
+        (issorted(rows) || issorted(cols)) || return false
+    end
+    return true
+end
+
+if what in ("wide", "all")
+    out = get(ENV, "OUT", "")
+    rows = String[]
+    println("\n4. 512-bit experiment, ns per key (lower is better)")
+    println("  partition step, out of place:   256 table | 256 compress | 512 compress | 512 vs 256 table")
+    for T in (Int32, Float32, Int64, Float64)
+        N = Q.lanes(T); N2 = 2N
+        ok = check_wide(T, N2)
+        ok || println("  $T: 512-bit kernels give WRONG results, skipped")
+        ok || continue
+        for k in (14, 24)
+            t1 = part_cost_n(T, 2^k, :table, N); t2 = part_cost_n(T, 2^k, :compress, N)
+            t3 = part_cost_n(T, 2^k, :compress, N2)
+            @printf("  %-8s 2^%d:  %6.3f | %6.3f | %6.3f | %.2fx\n", T, k, t1, t2, t3, t1 / t3)
+            push!(rows, "partition,$T,$(2^k),$t1,$t2,$t3")
+        end
+    end
+    println("  networks (load, sort, store):    256 x 32 rows | 512 x 16 rows | 512 x 32 rows | best 512 vs 256")
+    for T in (Int32, Float32, Int64, Float64)
+        N = Q.lanes(T); N2 = 2N
+        t1 = net_cost_n(T, 32, N); t2 = net_cost_n(T, 16, N2); t3 = net_cost_n(T, 32, N2)
+        @printf("  %-8s        %6.3f (%3d keys) | %6.3f (%3d) | %6.3f (%3d) | %.2fx\n",
+                T, t1, 32N, t2, 16N2, t3, 32N2, t1 / min(t2, t3))
+        push!(rows, "network,$T,0,$t1,$t2,$t3")
+    end
+    if !isempty(out)
+        mkpath(out)
+        open(joinpath(out, "avx512_wide.csv"), "w") do io
+            println(io, "kernel,type,n,ns_256_table_or_32rows,ns_256_compress_or_512_16rows,ns_512")
+            foreach(r -> println(io, r), rows)
+        end
     end
 end

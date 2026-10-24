@@ -62,6 +62,31 @@ for (T, N, sfx, llt) in ((Float32, 8, "ps", "float"), (Float64, 4, "pd", "double
         end
     end
 end
+# The same for 512-bit vectors on AVX-512 (for the 512-bit experiment in
+# bench/avx512.jl; the sort itself uses 256-bit vectors). The intrinsics take a
+# rounding argument: 4 is the current direction.
+for (T, N, sfx, llt) in ((Float32, 16, "ps", "float"), (Float64, 8, "pd", "double"))
+    for (f, op) in ((:vmin, "min"), (:vmax, "max"))
+        intr = "llvm.x86.avx512.$op.$sfx.512"
+        ir = ("""
+            declare <$N x $llt> @$intr(<$N x $llt>, <$N x $llt>, i32)
+            define <$N x $llt> @entry(<$N x $llt> %a, <$N x $llt> %b) #0 {
+              %r = call <$N x $llt> @$intr(<$N x $llt> %a, <$N x $llt> %b, i32 4)
+              ret <$N x $llt> %r
+            }
+            attributes #0 = { alwaysinline }
+            """, "entry")
+        @eval @generated function $f(a::Vec{$N,$T}, b::Vec{$N,$T})
+            if SIMD.Targets.has_feature(:avx512f)
+                return :(Vec(Base.llvmcall($$ir, SIMD.LVec{$$N,$$T},
+                                           Tuple{SIMD.LVec{$$N,$$T}, SIMD.LVec{$$N,$$T}},
+                                           a.data, b.data)))
+            else
+                return :($$(op == "min" ? :min : :max)(a, b))
+            end
+        end
+    end
+end
 
 # Constant one- and two-input shuffles; lane indices are 0-based.
 _shuf(x, perm) = :(shufflevector($x, Val($(Tuple(perm)))))
