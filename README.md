@@ -159,12 +159,14 @@ single-threaded and the fastest 8-thread result are bold.
   duplicate-heavy and presorted inputs. ChapelSort's parallel radix sort leads
   for `UInt64` at 2^27 keys (0.305 vs 0.399 s), where the laptop's memory
   bandwidth is the limit.
-- **Many cores:** on a 2 × 28-core Xeon Gold 6348 (AVX-512) at 56 threads,
-  `Int64` 2^26 takes 0.053 s (ChapelSort 0.078, x86-simd-sort 0.133) and
-  `Float64` 0.060 s (0.093, 0.129): from 16 threads and large inputs a
-  sample-sort step replaces the top partition levels, which stop scaling
-  (docs/src/design.md §7j). ChapelSort still leads for `UInt64` 2^27 (0.123 vs
-  0.151 s).
+- **Many cores and AVX-512:** on a 2 × 28-core Xeon Gold 6348 at 56
+  threads, `Int64` 2^26 takes 0.045 s (ChapelSort 0.083, x86-simd-sort 0.133),
+  `Float64` 0.061 s (0.097, 0.127) and `UInt64` 2^27 0.102 s (0.116, 0.275):
+  from 16 threads and large inputs a sample-sort step replaces the top
+  partition levels, which stop scaling (docs/src/design.md §7j). With AVX-512
+  the kernels use 512-bit vectors; on one thread SIMDSort then leads
+  x86-simd-sort for `Int64` and `UInt64`, and trails it by 3% for `Int32` and
+  11% for `Float64` (docs/src/avx512.md).
 
 ![Duplicates and presorted inputs](docs/src/assets/special.svg)
 
