@@ -355,9 +355,14 @@ end
     end
 
     @testset "distribution top level (64-bit keys)" begin
-        old = (SIMDSort.DIST_MINN[], SIMDSort.DIST_MINTASKS[])
-        SIMDSort.DIST_MINN[] = 1
-        SIMDSort.DIST_MINTASKS[] = 1
+        # The rule (src/msd.jl): from 16 tasks (64-bit keys) or 20 (32-bit),
+        # and keys × bytes × tasks >= 2^33.
+        ud = SIMDSort.use_distribution
+        @test ud(2^26, 8, 16) && !ud(2^25, 8, 16) && !ud(2^28, 8, 8)
+        @test ud(2^25, 8, 32) && !ud(2^24, 8, 32) && ud(2^25, 8, 56)
+        @test !ud(2^28, 4, 16) && ud(2^27, 4, 24) && !ud(2^25, 4, 32)
+        old = SIMDSort.DIST_MODE[]
+        SIMDSort.DIST_MODE[] = :on
         try
             n = 2 * 10^5 + 3
             fl = randn(rng, n); fl[1:7:end] .= 0.0; fl[2:7:end] .= -0.0; fl[3:101:end] .= NaN; fl[4:997:end] .= Inf
@@ -370,7 +375,7 @@ end
             r = SIMDSort.instrumented(() -> simdsort!(rand(rng, UInt64, n); ntasks = 8))
             @test get(r.counters, :dist_sorts, 0) == 1
         finally
-            SIMDSort.DIST_MINN[], SIMDSort.DIST_MINTASKS[] = old
+            SIMDSort.DIST_MODE[] = old
         end
     end
 

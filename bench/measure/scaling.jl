@@ -28,12 +28,12 @@ end
 
 # SIMDSort with the sample-sort top level forced on, and forced off.
 function with_dist(f, on::Bool)
-    old = (Q.DIST_MINN[], Q.DIST_MINTASKS[])
-    Q.DIST_MINN[], Q.DIST_MINTASKS[] = on ? (1 << 20, 1) : (typemax(Int), typemax(Int))
+    old = Q.DIST_MODE[]
+    Q.DIST_MODE[] = on ? :on : :off
     try
         f()
     finally
-        Q.DIST_MINN[], Q.DIST_MINTASKS[] = old
+        Q.DIST_MODE[] = old
     end
 end
 dist!(v, nt) = with_dist(() -> simdsort!(v; ntasks = nt), true)
@@ -63,7 +63,7 @@ function methods_for(x, op, nt)
         return ms
     end
     push!(ms, "SIMDSort" => v -> simdsort!(v; ntasks = nt), "ChapelSort" => v -> psort!(v; ntasks = nt))
-    # "SIMDSort" is the default (sample-sort top level from DIST_MINTASKS tasks);
+    # "SIMDSort" is the default (sample-sort top level by use_distribution);
     # the two forced variants show the crossover.
     T <: Union{Int32,UInt32,Float32,Int64,UInt64,Float64} &&
         push!(ms, "SIMDSort dist" => v -> dist!(v, nt), "SIMDSort quicksort" => v -> qs!(v, nt))

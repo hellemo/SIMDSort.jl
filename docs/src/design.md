@@ -611,13 +611,32 @@ scaling at about 16 threads, while the distribution step keeps going:
 | `Int64` 2^26, distribution | 0.213 | 0.115 | 0.074 | 0.059 |
 | ChapelSort `Int64` 2^26 | 0.275 | 0.153 | 0.103 | 0.078 |
 
-So `sort_auto!` uses it from `DIST_MINTASKS` tasks and `DIST_MINN = 2^22`
-keys, for all six primitive key types. A second run with all six types showed
-a tie or loss at 16 tasks (Int64 0.133 against 0.119 s, Int32 0.072 against
-0.054 s) and clear wins from 32 (Int64 0.075 against 0.112 s at 32, 0.055
-against 0.109 at 56; Float64 0.058 against 0.117 at 56; Int32 0.035 against
-0.047), so `DIST_MINTASKS = 24`. (`bench/measure/scaling.jl`, methods
-"SIMDSort dist" and "SIMDSort quicksort", measures the crossover.)
+**When it wins: a measured rule.** `bench/measure/distcross.jl` times both
+top levels, forced, for Int64, UInt64, Float64 and Int32 at 2^20–2^28 keys
+and 4–56 tasks on the Xeon. The crossover size falls as the number of tasks
+grows, because the quicksort's partition passes before its tasks are
+independent grow with ``\log_2`` of the task count while the distribution's
+are fixed:
+
+| crossover (keys) | 16 tasks | 20 | 24 | 32 | 40 | 48 | 56 |
+|---|---|---|---|---|---|---|---|
+| Int64 | 2^26 | 2^25 | 2^25 | 2^25 | 2^24 | 2^24 | 2^24 |
+| UInt64 | 2^26 | 2^25 | 2^25 | 2^25 | 2^25 | 2^24 | 2^25 |
+| Float64 | – | 2^26 | 2^25 | 2^25 | 2^24 | 2^25 | 2^25 |
+| Int32 | – | – | 2^27 | 2^26 | 2^26 | 2^25 | 2^26 |
+
+In bytes the 32- and 64-bit crossovers agree (Int32 2^26 keys and Int64 2^25
+are both 256 MB at 32 tasks), so `use_distribution` takes the sample-sort
+step from 16 tasks for 64-bit keys (20 for 32-bit keys, whose quicksort has
+twice the lanes and still wins at 16) and when keys × bytes per key × tasks
+≥ 2^33: 512 MB at 16 tasks, 256 MB at 32, about 150 MB at 56. Against always
+taking the faster of the two, it loses 0.5% on average over the grid; the
+earlier rule (from 24 tasks and 2^22 keys) lost 6.6%, up to 2.4× at 2^22
+keys, where the distribution is much slower; never using the step loses
+9.8% (27% for 2^24 keys and more at 16 tasks or more). A grid search over
+the rule's constants (the script's fit) gives 24 tasks for 32-bit keys and
+2^32.5, at 0.3%: within the noise of one run, so the round values stay.
+`DIST_MODE[]` (`:on`, `:off`) forces the choice for measurements.
 
 ## 8. Other key types: windowed keys
 

@@ -70,15 +70,15 @@ function main()
     push!(jobs, (CASES[1]..., NT, CASES[1][1] * " [quicksort]"), (CASES[2]..., NT, CASES[2][1] * " [quicksort]"),
           (CASES[3]..., NT, CASES[3][1] * " [quicksort]"))
     for (name, gen, op, nt, label) in jobs
-        old = (Q.DIST_MINN[], Q.DIST_MINTASKS[])
-        endswith(label, "[quicksort]") && (Q.DIST_MINN[] = typemax(Int))
+        old = Q.DIST_MODE[]
+        endswith(label, "[quicksort]") && (Q.DIST_MODE[] = :off)
         plain, r = try
             measure(name, gen, op, nt)
         catch err
             println(txt, "== $label, $nt threads: ERROR $err"); flush(txt)
             continue
         finally
-            Q.DIST_MINN[], Q.DIST_MINTASKS[] = old
+            Q.DIST_MODE[] = old
         end
         hdr = @sprintf("== %s, %d threads: wall %.4f s plain, %.4f s instrumented", label, nt, plain, r.wall)
         println(hdr); println(txt, hdr)

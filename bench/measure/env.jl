@@ -33,7 +33,7 @@ end
 println("  constants: UNROLL=$(Q.UNROLL) PFDIST=$(Q.PFDIST) PF_MIN_BYTES=$(Q.PF_MIN_BYTES) ",
         "PAR_MIN=$(Q.PAR_MIN) PPART_MIN=$(Q.PPART_MIN) GRAIN_FACTOR=$(Q.GRAIN_FACTOR) ",
         "BIGPIVOT_MINN=$(Q.BIGPIVOT_MINN) MAXROWS=$(Q.MAXROWS) MSD_BUCKETS=$(Q.MSD_BUCKETS) ",
-        "DIST_MINN=$(Q.DIST_MINN[]) HASH_MAXK=$(Q.HASH_MAXK)")
+        "DIST_MINWORK=2^$(round(Int, log2(Q.DIST_MINWORK))) HASH_MAXK=$(Q.HASH_MAXK)")
 
 println("\ncaches (sysfs, cpu0):")
 for d in sort(filter(startswith("index"), readdir("/sys/devices/system/cpu/cpu0/cache"; join = false)))

@@ -281,8 +281,8 @@ end
 # quicksort stops scaling at about 16 threads: on a 2 × 28-core Xeon Gold 6348 it
 # takes the same time at 16, 32 and 56 threads (UInt64 2^27: 0.29 s), while
 # this step keeps scaling (0.28, 0.18, 0.15 s; Int64 2^26 at 56 threads:
-# 0.059 s against 0.110). At 8 threads it loses (laptop and Xeon), so it is
-# used from DIST_MINTASKS tasks.
+# 0.059 s against 0.110). With few tasks or small inputs it loses, so
+# use_distribution decides by a measured rule (below).
 #
 # One distribution into DIST_BUCKETS buckets (a count and a scatter, both
 # parallel) replaces about log2(DIST_BUCKETS) partition passes over the whole
@@ -290,21 +290,44 @@ end
 # in cache.
 
 const DIST_BUCKETS = 256          # bucket ids fit a UInt8
-const DIST_MINN = Ref(1 << 22)      # keys
-const DIST_MINTASKS = Ref(24)       # Xeon: ties or loses at 16 tasks, wins at 32 and 56
 
-use_distribution(n::Int, ntasks::Int) = ntasks >= DIST_MINTASKS[] && n >= DIST_MINN[]
+# When the sample-sort step beats the quicksort, measured over 2^20..2^28
+# keys and 4..56 tasks on the Xeon (bench/measure/distcross.jl,
+# docs/src/design.md §7j): from 16 tasks for 64-bit keys (20 for 32-bit keys,
+# whose quicksort has twice the lanes), and from an input size that falls
+# with the number of tasks: keys × bytes per key × tasks >= 2^33 (512 MB at
+# 16 tasks, 256 MB at 32, 160 MB at 56). The quicksort's partition passes
+# before its tasks are independent grow with log2(ntasks); the
+# distribution's are fixed.
+const DIST_MINWORK = 1 << 33        # bytes × tasks
+dist_mintasks(keybytes::Int) = keybytes >= 8 ? 16 : 20
+
+# :auto (the rule), or :on / :off to force the choice in measurements and tests.
+const DIST_MODE = Ref(:auto)
+
+"""
+    use_distribution(n, keybytes, ntasks) -> Bool
+
+Whether `sort_auto!` uses the sample-sort top level for `n` keys of
+`keybytes` bytes on `ntasks` tasks (`DIST_MODE[]` set to `:on` or `:off`
+forces the choice).
+"""
+function use_distribution(n::Int, keybytes::Int, ntasks::Int)
+    mode = DIST_MODE[]
+    mode === :auto || return mode === :on
+    return ntasks >= dist_mintasks(keybytes) && n * keybytes * ntasks >= DIST_MINWORK
+end
 
 """
     sort_auto!(k, ntasks)
 
-The quicksort, or above DIST_MINTASKS tasks and DIST_MINN keys the
-sample-sort top level (which falls back to the quicksort when the sample
-has too few distinct keys).
+The quicksort, or the sample-sort top level where
+[`use_distribution`](@ref SIMDSort.use_distribution) says it wins (it falls
+back to the quicksort when the sample has too few distinct keys).
 """
 function sort_auto!(k::KeyVector, ntasks::Int)
     n = length(k)
-    use_distribution(n, ntasks) && @phase(:distribution, distribute_sort!(k, ntasks)) && return nothing
+    use_distribution(n, sizeof(eltype(k)), ntasks) && @phase(:distribution, distribute_sort!(k, ntasks)) && return nothing
     owner = keyowner(k)
     GC.@preserve owner @phase :quicksort sort_keys!(keyref(k), n, ntasks)
     return nothing
