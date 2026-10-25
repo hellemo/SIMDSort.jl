@@ -675,14 +675,27 @@ counting [CAFS]:
    distinct symbols they take the byte path.
 2. Each task counts its chunk in its own table (key and count in one slot).
 3. The tables are merged in parallel, each task taking the keys whose hash
-   slots fall in its share.
+   slots fall in its share. With linear probing those keys lie in that share
+   of each table and the run of occupied slots after it, so each task reads
+   only its share and the merge reads every table once (reading all tables
+   in every task made it quadratic in the task count: 0.14 s at 56 threads).
+   Each task allocates its own table, in parallel and near its core.
 4. The distinct names are ranked by the byte-key sort.
 5. `sort!` writes the runs in parallel. `sortperm` looks up every element's
    rank in a read-only table and sorts the `Int32` ranks stably.
 
-10^7 symbols on 8 threads: 5 distinct 0.006 s, 10^5 distinct 0.068 s (with the
-earlier per-element dictionary lookups: 0.118 s). With many distinct symbols
-the per-task tables no longer fit in cache, so counting dominates.
+The slot is the top bits of the address times an odd constant (Fibonacci
+hashing). Taking middle bits instead clustered the addresses, which are
+regularly spaced: 5 probes per insert at 2^18 and 2^19 slots for 10^5
+symbols, where linear probing needs 1.3–1.8, so the speed depended on the
+table size and with it on the sampled estimate (rounds of the same benchmark
+took 0.18 or 0.27 s on one thread). The merge tables of step 3 hold keys
+that share their top bits, so they hash with a second multiplier.
+
+10^7 symbols with 10^5 distinct: on 8 threads 0.025 s (0.068 s with the
+middle bits, 0.118 s with the earlier per-element dictionary lookups); on the
+Xeon at 56 threads 0.022 s before the hash change, against 0.028 s for
+ChapelSort.
 
 **Other numbers and composite types.**
 

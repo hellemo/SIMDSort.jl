@@ -63,7 +63,7 @@ end
 # slot in between, so the keys of `slots` are in these slots and in the run of
 # occupied slots after them (wrapping around; a table is at most half full).
 function merge_part(tables::Vector{CountTable{K}}, mask::Int, slots::UnitRange{Int}) where {K}
-    part = CountTable{K}(64)
+    part = CountTable{K}(64; mult = HASH_MULT2)    # its keys share their top bits
     used = 0
     for t in tables
         ts = t.slots
@@ -71,7 +71,7 @@ function merge_part(tables::Vector{CountTable{K}}, mask::Int, slots::UnitRange{I
         @inbounds while s <= last(slots) || ts[(s&mask)+1][2] != 0
             x, c = ts[(s&mask)+1]
             s += 1
-            (c == 0 || !(hashslot(x, mask) in slots)) && continue
+            (c == 0 || !(hashslot(x, mask, t.mult) in slots)) && continue
             used += add_count!(part, x, c)
             if 2used > capacity(part)           # keep it at most half full
                 part = rehash(part)
@@ -83,7 +83,7 @@ end
 
 # The same entries in a table of twice the capacity.
 function rehash(t::CountTable{K}) where {K}
-    u = CountTable{K}(2 * capacity(t))
+    u = CountTable{K}(2 * capacity(t); mult = t.mult)
     for (x, c) in zip(compact(t)...)
         add_count!(u, x, c)
     end
@@ -144,7 +144,7 @@ function lookup_ranks!(codes, t::CountTable{Symbol}, v, rg)
     mask = length(slots) - 1
     @inbounds for i in rg
         x = v[i]
-        s = hashslot(x, mask)
+        s = hashslot(x, mask, t.mult)
         while slots[s+1][1] !== x
             s = (s + 1) & mask
         end

@@ -41,15 +41,24 @@ end
 # are interned, so equal names are the same object, and never freed).
 @inline hashkey(x::Unsigned) = UInt64(x)
 @inline hashkey(x::Symbol) = UInt64(UInt(pointer_from_objref(x)))
-@inline hashslot(x, mask::Int) = ((hashkey(x) * 0x9e3779b97f4a7c15) >> 32) % Int & mask
+# Fibonacci hashing: the top bits of the product with an odd multiplier
+# (mask = capacity - 1). The middle bits clustered Symbol addresses, which are
+# regularly spaced (5 probes per insert where linear probing needs 1.3;
+# docs/src/design.md §8).
+const HASH_MULT = 0x9e3779b97f4a7c15
+# A second multiplier, for tables that hold keys sharing their top HASH_MULT
+# bits (the merge of symbols.jl), which would crowd into a few slots.
+const HASH_MULT2 = 0xbf58476d1ce4e5b9
+@inline hashslot(x, mask::Int, mult::UInt64 = HASH_MULT) = ((hashkey(x) * mult) >> (64 - count_ones(mask))) % Int
 
 # An open-addressing table (linear probing; capacity a power of two) from keys
 # to counts; keys are compared with ===. Key and count share one slot, so a
 # probe touches one cache line.
 struct CountTable{K}
     slots::Vector{Tuple{K,Int}}     # (key, count); count 0 marks an empty slot
+    mult::UInt64                    # the hash multiplier
 end
-CountTable{K}(cap::Int) where {K} = CountTable{K}(fill((emptykey(K), 0), cap))
+CountTable{K}(cap::Int; mult::UInt64 = HASH_MULT) where {K} = CountTable{K}(fill((emptykey(K), 0), cap), mult)
 emptykey(::Type{U}) where {U<:Unsigned} = zero(U)
 emptykey(::Type{Symbol}) = Symbol("")
 
@@ -63,7 +72,7 @@ function count_into!(t::CountTable{K}, k::AbstractVector{K}, r::UnitRange{Int}) 
     used = 0
     @inbounds for i in r
         x = k[i]
-        s = hashslot(x, mask)
+        s = hashslot(x, mask, t.mult)
         while true
             y, c = slots[s+1]
             if c == 0
@@ -92,7 +101,7 @@ end
 function add_count!(t::CountTable{K}, x::K, c::Int) where {K}
     slots = t.slots
     mask = length(slots) - 1
-    s = hashslot(x, mask)
+    s = hashslot(x, mask, t.mult)
     @inbounds while true
         y, d = slots[s+1]
         if d == 0
