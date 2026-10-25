@@ -74,16 +74,18 @@ end
     MappedKeys(), NativeKeys(), FloatKeys()
 
 How the six primitive types are sorted (`keyclass(T)`): `Int32`, `Int64` and
-`UInt64` are mapped to signed keys; `UInt32` is sorted as is; `Float32` and
-`Float64` are sorted as floats. Each class has its own `sort_primitive!`
+`UInt64` are mapped to signed keys (`UInt64` is sorted as is with 512-bit
+vectors); `UInt32` is sorted as is; `Float32` and `Float64` are sorted as
+floats. Each class has its own `sort_primitive!`
 method, which keeps its own (measured) order of the cheap checks for special
 inputs (counting, presorted, hash counting).
 """
 struct MappedKeys end
 struct NativeKeys end
 struct FloatKeys end
-keyclass(::Type{<:Union{Int32,Int64,UInt64}}) = MappedKeys()
+keyclass(::Type{<:Union{Int32,Int64}}) = MappedKeys()
 keyclass(::Type{UInt32}) = NativeKeys()
+keyclass(::Type{UInt64}) = wide() ? NativeKeys() : MappedKeys()
 keyclass(::Type{<:Union{Float32,Float64}}) = FloatKeys()
 
 # Integers are mapped to signed keys of the same width (an order-preserving
@@ -102,9 +104,10 @@ end
 
 # UInt32 keys are sorted as they are: AVX2 has unsigned 32-bit min/max, so the
 # kernels need no key map. Reverse complements the values (an exact involution
-# that reverses the unsigned order). UInt64 keeps the map: without unsigned
-# 64-bit min/max, native kernels cost as much as the two map passes save.
-function sort_primitive!(::NativeKeys, v::Vector{T}, o::Ord, nt::Int) where {T}
+# that reverses the unsigned order). UInt64 keeps the map on AVX2: without
+# unsigned 64-bit min/max, native kernels cost as much as the two map passes
+# save. AVX-512 has them (vpminuq, vpcmpuq), so there UInt64 is native too.
+function sort_primitive!(::NativeKeys, v::KeyVector{T}, o::Ord, nt::Int) where {T}
     @phase(:counting_check, counting_sort!(v, o, nt)) && return v
     @phase(:hash_check, hash_count_sort!(v, o, nt)) && return v
     isrev(o) && foreach_chunk(c -> mapkeys!(~, c), v, nt)

@@ -57,6 +57,7 @@ const CASES = [
     ("Int64 2^$L", () -> rand(rng, Int64, 2^L), :sort),
     ("Float64 2^$L", () -> randn(rng, 2^L), :sort),
     ("Int32 2^$L", () -> rand(rng, Int32, 2^L), :sort),
+    ("UInt64 2^$L", () -> rand(rng, UInt64, 2^L), :sort),
     ("UInt64 in 0:1000 2^$L", () -> rand(rng, UInt64(0):UInt64(1000), 2^L), :sort),
     ("UInt64 sorted 2^$L", () -> sort!(rand(rng, UInt64, 2^L)), :sort),
     ("Float64 sortperm 2^20", () -> randn(rng, 2^20), :perm),
