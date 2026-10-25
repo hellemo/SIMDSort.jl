@@ -28,18 +28,36 @@ function symbol_counts(v::Vector{Symbol}, ntasks::Int)
     est = chao1([hashkey(v[i]) for i in 1:(n ÷ HASH_SAMPLE):n])
     est > limit && return nothing
     cs = chunks(n, partasks(n, ntasks, PERM_PAR_MIN))
-    # A chunk has at most as many distinct symbols as keys.
-    cap = max(1 << 10, nextpow(2, ceil(Int, 4 * min(est, maximum(length, cs)))))
+    # Sized for the distinct symbols expected in a chunk of len keys drawn
+    # from est, at most a quarter full (a third or half full measured 15-35%
+    # slower with 1000 distinct); a table that gets half full is doubled (the
+    # estimate is from a small sample). All tables get the same capacity,
+    # which the merge needs.
+    len = maximum(length, cs)
+    cap = max(1 << 10, nextpow(2, ceil(Int, 4 * est * -expm1(-len / est))))
     tables = Vector{CountTable{Symbol}}(undef, length(cs))
-    ok = Vector{Bool}(undef, length(cs))
     # Each task makes its own table: in parallel, and in memory near its core.
     @phase :symbol_count tforeach_index(length(cs)) do c
-        t = CountTable{Symbol}(cap)
-        tables[c] = t
-        ok[c] = count_into!(t, v, cs[c])
+        tables[c] = count_chunk(v, cs[c], cap)
     end
-    all(ok) || (count!(:symbol_count_aborts); return nothing)
+    cap = maximum(capacity, tables)
+    for c in eachindex(tables)
+        capacity(tables[c]) < cap && (tables[c] = rehash(tables[c], cap))
+    end
     return @phase :symbol_merge merge_tables(tables, cap)
+end
+
+# The counts of v[r] in a table of capacity cap, doubled whenever it gets half
+# full.
+function count_chunk(v::Vector{Symbol}, r::UnitRange{Int}, cap::Int)
+    t = CountTable{Symbol}(cap)
+    i, used = count_into!(t, v, r)
+    while i <= last(r)
+        count!(:symbol_table_grows)
+        t = rehash(t, 2 * capacity(t))
+        i, used = count_into!(t, v, i:last(r), used)
+    end
+    return t
 end
 
 # The keys of all tables with their summed counts. With several tables, task p
@@ -81,9 +99,9 @@ function merge_part(tables::Vector{CountTable{K}}, mask::Int, slots::UnitRange{I
     return compact(part)
 end
 
-# The same entries in a table of twice the capacity.
-function rehash(t::CountTable{K}) where {K}
-    u = CountTable{K}(2 * capacity(t); mult = t.mult)
+# The same entries in a table of the given capacity (default: twice).
+function rehash(t::CountTable{K}, cap::Int = 2 * capacity(t)) where {K}
+    u = CountTable{K}(cap; mult = t.mult)
     for (x, c) in zip(compact(t)...)
         add_count!(u, x, c)
     end

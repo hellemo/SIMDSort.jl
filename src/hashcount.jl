@@ -64,12 +64,13 @@ emptykey(::Type{Symbol}) = Symbol("")
 
 capacity(t::CountTable) = length(t.slots)
 
-# Count the keys k[r] into t; false if t got more than half full.
-function count_into!(t::CountTable{K}, k::AbstractVector{K}, r::UnitRange{Int}) where {K}
+# Count the keys k[r] into t, which has `used` keys already. Stops when t gets
+# more than half full. Returns the index of the next key not counted
+# (last(r) + 1 when all are) and the number of keys in t.
+function count_into!(t::CountTable{K}, k::AbstractVector{K}, r::UnitRange{Int}, used::Int = 0) where {K}
     slots = t.slots
     mask = length(slots) - 1
     limit = length(slots) ÷ 2
-    used = 0
     @inbounds for i in r
         x = k[i]
         s = hashslot(x, mask, t.mult)
@@ -78,7 +79,7 @@ function count_into!(t::CountTable{K}, k::AbstractVector{K}, r::UnitRange{Int}) 
             if c == 0
                 slots[s+1] = (x, 1)
                 used += 1
-                used > limit && return false
+                used > limit && return (i + 1, used)
                 break
             elseif y === x
                 slots[s+1] = (x, c + 1)
@@ -87,7 +88,7 @@ function count_into!(t::CountTable{K}, k::AbstractVector{K}, r::UnitRange{Int}) 
             s = (s + 1) & mask
         end
     end
-    return true
+    return (last(r) + 1, used)
 end
 
 # The used slots of a table, as (keys, counts).
@@ -135,7 +136,7 @@ function hash_count_sort!(v::AbstractVector{T}, o::Ord, ntasks::Int) where {T<:S
     tables = [CountTable{U}(cap) for _ in cs]
     ok = Vector{Bool}(undef, length(cs))
     tforeach_index(length(cs)) do i
-        ok[i] = count_into!(tables[i], k, cs[i])
+        ok[i] = first(count_into!(tables[i], k, cs[i])) > last(cs[i])
     end
     all(ok) || (count!(:hash_aborts); return false)
     # Merge the tables (few entries each).

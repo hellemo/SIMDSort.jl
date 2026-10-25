@@ -242,7 +242,7 @@ end
             @test isequal(simdsort(sy; rev, ntasks=nt), sort(sy; rev))
         end
         # Symbols by hash counting: few and many distinct, more distinct than
-        # n/4 (byte path), a table that overflows its estimate (fallback),
+        # n/4 (byte path), a table that overflows its estimate (it grows),
         # and several tasks merging the per-task tables.
         names = [Symbol(randstr(rand(rng, 1:12))) for _ in 1:30_000]
         symcases = [rand(rng, names[1:3], 50_000), rand(rng, names[1:2000], 200_000),
@@ -268,6 +268,20 @@ end
         end
         r = SIMDSort.instrumented(() -> simdsort!(rand(rng, names[1:50], 100_000); ntasks = 4))
         @test get(r.counters, :symbol_sorts, 0) == 1
+        # Tables that outgrow the estimate in some chunks only: they are
+        # doubled, and brought to one capacity for the merge. The sampled
+        # positions (a stride of n ÷ HASH_SAMPLE) hold one symbol, so the
+        # estimate is far too low; the many distinct ones are in the first 30%.
+        sy = fill(names[1], 100_000)
+        stride = 100_000 ÷ SIMDSort.HASH_SAMPLE
+        for i in 1:30_000
+            (i - 1) % stride == 0 || (sy[i] = rand(rng, names[1:20_000]))
+        end
+        for nt in (1, 4, 8)
+            r = SIMDSort.instrumented(() -> simdsort!(copy(sy); ntasks = nt))
+            @test get(r.counters, :symbol_table_grows, 0) >= 1 && get(r.counters, :symbol_sorts, 0) == 1
+            @test simdsort(sy; ntasks = nt) == sort(sy) && simdsortperm(sy; ntasks = nt) == sortperm(sy)
+        end
         # Views: SubString{String}, and StringView (Julia 1.14+).
         long = [randstr(rand(rng, 0:30)) * "\xff" for _ in 1:20_000]
         subs = [SubString(s, 1, max(0, ncodeunits(s) - rand(rng, 1:3))) for s in long]
