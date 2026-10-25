@@ -48,7 +48,16 @@ use_prefetch(::Type{T}, n::Int) where {T} = n * sizeof(T) > PF_MIN_BYTES
 # Both stores are full width; the caller guarantees the extra lanes land in free
 # slots.
 @inline function part1(x::Vec{N,T}, pv::Vec{N,T}, p::KeyRef{T}, lw::Int, rw::Int) where {N,T}
-    y, c = vpartition(x, x <= pv)
+    m = x <= pv
+    if N * sizeof(T) == 64
+        # 512-bit vectors (AVX-512): native compress, full width to the left and
+        # a compress-store of exactly the N - c keys to the right [Bra17].
+        c = count(m)
+        vst(vcompress(x, m), p, lw)
+        vstc(x, p, rw - (N - c), !m)
+        return lw + c, rw - (N - c)
+    end
+    y, c = vpartition(x, m)
     vst(y, p, lw)
     vst(y, p, rw - N)
     return lw + c, rw - (N - c)
@@ -142,6 +151,13 @@ end
 # Three-way partition of one vector: keys < pivot go left, keys > pivot go right,
 # keys equal to the pivot are dropped (the caller refills them).
 @inline function part3(x::Vec{N,T}, pv::Vec{N,T}, p::KeyRef{T}, lw::Int, rw::Int) where {N,T}
+    if N * sizeof(T) == 64                # 512-bit vectors, as in part1
+        lt, gt = x < pv, x > pv
+        g = count(gt)
+        vst(vcompress(x, lt), p, lw)
+        vstc(x, p, rw - g, gt)
+        return lw + count(lt), rw - g
+    end
     y, c = vpartition(x, x < pv)
     vst(y, p, lw)
     z, d = vpartition(x, !(x > pv))     # the keys > pivot come last

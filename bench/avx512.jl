@@ -58,7 +58,7 @@ end)
 # ns/key of the partition step alone (out of place, so the input is unchanged
 # between repetitions; random keys, pivot 0, i.e. unpredictable sides).
 function part_cost(::Type{T}, n, kernel) where {T}
-    N = Q.lanes(T)
+    N = Q.netlanes(T)
     a = T <: AbstractFloat ? T.(randn(n)) : rand(T, n)
     tmp = Vector{T}(undef, n + 2N)
     reps = max(1, 2^24 ÷ n)
@@ -107,7 +107,7 @@ Q.eval(quote
 end)
 
 function net_cost(::Type{T}, f) where {T}
-    N = Q.lanes(T); R = 32; M = 4096
+    N = Q.netlanes(T); R = 32; M = 4096
     a = T <: AbstractFloat ? T.(randn(R * N * M)) : rand(T, R * N * M)
     run(b) = GC.@preserve b Base.invokelatest(Q.net_loop!, f, pointer(b), M, Val(R), Val(N))
     run(copy(a))
@@ -118,7 +118,7 @@ end
 if what in ("net", "all")
     println("\n2. 32-row base-case network, ns per call (single / two halves)")
     for T in (Int32, Float32, Int64, Float64)
-        @printf("  %-8s %3d keys: %.0f / %.0f\n", T, 32 * Q.lanes(T), net_cost(T, Q.net_single), net_cost(T, Q.net_halves))
+        @printf("  %-8s %3d keys: %.0f / %.0f\n", T, 32 * Q.netlanes(T), net_cost(T, Q.net_single), net_cost(T, Q.net_halves))
     end
 end
 
@@ -216,7 +216,7 @@ if what in ("wide", "all")
     println("\n4. 512-bit experiment, ns per key (lower is better)")
     println("  partition step, out of place:   256 table | 256 compress | 512 compress | 512 vs 256 table")
     for T in (Int32, Float32, Int64, Float64)
-        N = Q.lanes(T); N2 = 2N
+        N = Q.netlanes(T); N2 = 2N
         ok = check_wide(T, N2)
         ok || println("  $T: 512-bit kernels give WRONG results, skipped")
         ok || continue
@@ -229,7 +229,7 @@ if what in ("wide", "all")
     end
     println("  networks (load, sort, store):    256 x 32 rows | 512 x 16 rows | 512 x 32 rows | best 512 vs 256")
     for T in (Int32, Float32, Int64, Float64)
-        N = Q.lanes(T); N2 = 2N
+        N = Q.netlanes(T); N2 = 2N
         t1 = net_cost_n(T, 32, N); t2 = net_cost_n(T, 16, N2); t3 = net_cost_n(T, 32, N2)
         @printf("  %-8s        %6.3f (%3d keys) | %6.3f (%3d) | %6.3f (%3d) | %.2fx\n",
                 T, t1, 32N, t2, 16N2, t3, 32N2, t1 / min(t2, t3))

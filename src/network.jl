@@ -450,21 +450,41 @@ end
     return nothing
 end
 
-lanes(::Type{T}) where {T} = 32 ÷ sizeof(T)   # 256-bit vectors
+# Vector width in bits: 512 with AVX-512 (F + VL), else 256. The 512-bit
+# partition step (native compress) and 16-row network measured 12-28% faster per
+# key than the 256-bit ones on a Xeon Gold 6348 (bench/avx512.jl wide;
+# docs/src/avx512.md). VEC_BITS = 256 or 512 forces a width (the test matrix
+# runs the 512-bit code on AVX2).
+const VEC_BITS = 0
+vecbits() = VEC_BITS != 0 ? VEC_BITS : has_avx512() ? 512 : 256
+wide() = vecbits() == 512
 
-# The base case uses up to MAXROWS registers: 256 32-bit or 128 64-bit keys.
+"""
+    lanes(T)
+
+Keys per vector in the partition and scan kernels: 256- or 512-bit vectors
+(see `vecbits`).
+"""
+lanes(::Type{T}) where {T} = vecbits() ÷ (8 * sizeof(T))
+
+# Keys per 256-bit vector: the small networks of the base case.
+netlanes(::Type{T}) where {T} = 32 ÷ sizeof(T)
+
+# The base case holds 32 256-bit registers' worth of keys (256 32-bit or 128
+# 64-bit), sorted as 32 rows of 256 bits, or as 16 rows of 512 bits when wide.
 const MAXROWS = 32
-basecase_max(::Type{T}) where {T} = MAXROWS * lanes(T)
+basecase_max(::Type{T}) where {T} = MAXROWS * netlanes(T)
 
 """
     small_sort!(p, n, buf, tr = PlainKeys())
 
 Sort `n ≤ basecase_max(T)` keys at `p`, using `buf` (at least that many keys) as
-scratch. The smallest network with R ∈ {N, 2N, 4N} rows that fits is used; up to
+scratch. The smallest 256-bit network with R ∈ {N, 2N, 4N} rows that fits is
+used, and for the full base case with 512-bit vectors 16 rows of 512 bits; up to
 8 plain keys get an insertion sort.
 """
 @inline function small_sort!(p::KeyRef{T}, n::Int, buf::KeyRef{T}, tr = PlainKeys()) where {T}
-    N = lanes(T)
+    N = netlanes(T)
     if n <= 8 && tr isa PlainKeys
         insertion_sort!(p, n)
     elseif n <= N * N
@@ -473,6 +493,8 @@ scratch. The smallest network with R ∈ {N, 2N, 4N} rows that fits is used; up 
         netsort!(p, n, buf, Val(min(2N, MAXROWS)), Val(N), tr)
     elseif n <= 4N * N && 4N <= MAXROWS
         netsort!(p, n, buf, Val(min(4N, MAXROWS)), Val(N), tr)
+    elseif wide()
+        netsort!(p, n, buf, Val(MAXROWS ÷ 2), Val(2N), tr)
     else
         netsort!(p, n, buf, Val(MAXROWS), Val(N), tr)
     end

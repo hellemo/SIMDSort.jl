@@ -74,6 +74,20 @@ N keys as a vector from offset i, and back.
     (CHECK_KEYS ? vstore(x, r.v, r.off + i + 1) : @inbounds(vstore(x, r.v, r.off + i + 1)); nothing)
 
 """
+    vstc(x::Vec, r, i, mask)
+
+The lanes of x selected by mask, in order, stored from offset i (exactly
+count(mask) keys: a compress-store, native on AVX-512).
+"""
+@inline vstc(x::Vec{N,T}, p::Ptr{T}, i::Int, m::Vec{N,Bool}) where {N,T} = vstorec(x, p + i * sizeof(T), m)
+@inline function vstc(x::Vec{N,T}, r::ArrRange{T}, i::Int, m::Vec{N,Bool}) where {N,T}
+    # (vstorec's own bounds check covers N keys, more than are written.)
+    CHECK_KEYS && checkbounds(r.v, r.off+i+1:r.off+i+count(m))
+    @inbounds vstorec(x, r.v, r.off + i + 1, m)
+    return nothing
+end
+
+"""
     ld(r, i)
     st!(r, x, i)
 

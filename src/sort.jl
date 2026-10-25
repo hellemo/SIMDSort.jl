@@ -89,7 +89,7 @@ end
 
 @inline function median_lane(v::Vec{N,T}) where {N,T}
     t = Tuple(v)
-    # Insertion sort of N ≤ 8 scalars.
+    # Insertion sort of N ≤ 16 scalars.
     for i in 2:N, j in i:-1:2
         t[j-1] <= t[j] && break
         t = Base.setindex(Base.setindex(t, t[j], j - 1), t[j-1], j)

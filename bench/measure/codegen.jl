@@ -47,12 +47,14 @@ function main()
         push!(kernels, ("small_sort", T, Q.small_sort!, (P, Int, P)))
     end
     push!(kernels, ("leaf_sort", Int64, Q.leaf_sort!, (Ptr{Int64}, Int, Ptr{Int64}, Int64, Int64)))
-    # The 32-row and 16-row networks alone.
+    # The networks alone: 256-bit with 16 and 32 rows, and the 16-row 512-bit
+    # network of the base case on AVX-512.
     for T in (Int32, Float32, Int64, Float64)
-        N = Q.lanes(T)
+        N = Q.netlanes(T)
         for R in (16, 32)
             push!(kernels, ("sortnet$R", T, Q.sortnet, (NTuple{R,Vec{N,T}},)))
         end
+        push!(kernels, ("sortnet16x512", T, Q.sortnet, (NTuple{16,Vec{2N,T}},)))
     end
     for (name, T, f, types) in kernels
         s = try

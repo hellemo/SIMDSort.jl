@@ -11,7 +11,7 @@
 # Env: SIZE_LOG (2^k keys for the primitive cases, default 24), NT (threads
 # for the parallel cases, default all), OUT (if set, writes $OUT/ab.csv),
 # AB_ONLY (run only the cases whose name contains this string), AB_NEW_EDIT
-# (one constant of the working tree changed, see below).
+# and AB_BASE_EDIT (one constant of either side changed, see below).
 
 using SIMD, Random, Statistics, Printf
 
@@ -25,7 +25,17 @@ const GATE = 1.02
 const L = parse(Int, get(ENV, "SIZE_LOG", "24"))
 const NT = parse(Int, get(ENV, "NT", string(Threads.nthreads())))
 
-const BASE = load_variant(BASE_SRC, "SIMDSort_base")
+# AB_BASE_EDIT: the same for the baseline (e.g. the working tree as its own
+# baseline with "network.jl:VEC_BITS=256", to measure the 512-bit path).
+const BASE_EDIT = get(ENV, "AB_BASE_EDIT", "")
+const BASE = if isempty(BASE_EDIT)
+    load_variant(BASE_SRC, "SIMDSort_base")
+else
+    let (file, rest) = split(BASE_EDIT, ":"; limit = 2), (name, value) = split(rest, "="; limit = 2)
+        println("baseline with ", file, ": const ", name, " = ", value)
+        load_variant(BASE_SRC, "SIMDSort_base"; file, name, value)
+    end
+end
 # AB_NEW_EDIT="file.jl:NAME=value" changes one constant of the working tree
 # (e.g. "keyref.jl:SAFE_KEYS=false").
 const NEW_EDIT = get(ENV, "AB_NEW_EDIT", "")

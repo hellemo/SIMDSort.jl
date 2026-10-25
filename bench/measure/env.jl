@@ -28,7 +28,7 @@ println("  has_avx = ", Q.has_avx(), ", has_avx512 = ", Q.has_avx512())
 println("  Int64 leaves as Float64 offsets (F5): ", Q.has_avx() && !Q.has_avx512())
 println("  32-row networks split in halves (non-64-bit-int types): ", !SIMD.Targets.has_feature(:avx512f))
 for T in (Int32, UInt32, Float32, Int64, UInt64, Float64)
-    @printf("  %-8s lanes %d, base case up to %d keys\n", T, Q.lanes(T), Q.basecase_max(T))
+    @printf("  %-8s lanes %d (%d-bit vectors), base case up to %d keys\n", T, Q.lanes(T), Q.vecbits(), Q.basecase_max(T))
 end
 println("  constants: UNROLL=$(Q.UNROLL) PFDIST=$(Q.PFDIST) PF_MIN_BYTES=$(Q.PF_MIN_BYTES) ",
         "PAR_MIN=$(Q.PAR_MIN) PPART_MIN=$(Q.PPART_MIN) GRAIN_FACTOR=$(Q.GRAIN_FACTOR) ",
