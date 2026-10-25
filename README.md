@@ -1,5 +1,8 @@
 # SIMDSort.jl
 
+[![Docs (dev)](https://img.shields.io/badge/docs-dev-blue.svg)](https://hellemo.github.io/SIMDSort.jl/dev/)
+[![CI](https://github.com/hellemo/SIMDSort.jl/actions/workflows/CI.yml/badge.svg?branch=main)](https://github.com/hellemo/SIMDSort.jl/actions/workflows/CI.yml?query=branch%3Amain)
+
 > [!WARNING]
 > SIMDSort.jl depends on an **unreleased fork of SIMD.jl**: branch
 > [`permute-compress`](https://github.com/hellemo/SIMD.jl/tree/permute-compress)
