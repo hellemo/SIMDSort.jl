@@ -881,6 +881,11 @@ alias-annotated stores.
   on BigInt and 1.5× on BigFloat; the A/B gate had no bignum case, so it
   went unnoticed until the README benchmarks (it has them now).
 
+  *Possible follow-up:* read the limbs through `mpz_limbs_read` (documented
+  GMP 6, returns a pointer to the limbs) with `unsafe_load`, which would
+  remove the per-limb call and likely the one-thread gap, at the price of one
+  more unsafe spot here. Kept safe for now.
+
 Removed:
 - the array of raw string pointers;
 - the bignum pointer array;
