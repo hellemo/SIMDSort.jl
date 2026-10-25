@@ -1,7 +1,7 @@
 # The tests on Julia 1.10 (the oldest supported) and the current release, on
 # x86-64 Linux (the AVX2 or AVX-512 code paths, as the runner's CPU has), with
-# SIMD.jl's portable lowering (SIMD_JL_GENERIC=1), and on Apple silicon (ARM,
-# not yet supported: experimental, its failures do not fail the workflow).
+# SIMD.jl's portable lowering (SIMD_JL_GENERIC=1), and on Apple silicon (ARM:
+# the portable lowering, checked for correctness only, not tuned).
 name: CI
 on:
   push:
@@ -19,7 +19,6 @@ jobs:
     name: Julia ${{ matrix.version }}, ${{ matrix.os }}${{ matrix.generic && ', generic lowering' || '' }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
-    continue-on-error: ${{ matrix.experimental || false }}
     strategy:
       fail-fast: false
       matrix:
@@ -27,7 +26,7 @@ jobs:
           - {version: '1.10', os: ubuntu-latest}
           - {version: '1', os: ubuntu-latest}
           - {version: '1', os: ubuntu-latest, generic: true}
-          - {version: '1', os: macos-latest, experimental: true}
+          - {version: '1', os: macos-latest}
     env:
       JULIA_NUM_THREADS: 4
       SIMD_JL_GENERIC: ${{ matrix.generic && '1' || '' }}

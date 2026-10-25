@@ -272,12 +272,12 @@ where data would help most.
 
 ## Limitations
 
-- Tuned and tested on one AVX2 machine only, with 256-bit vectors.
-  - CPUs without AVX2 (and ARM) get SIMD.jl's portable lowering. It is correct
-    and covered by the tests with `SIMD_JL_GENERIC=1`, but about 4× slower.
-  - On AVX-512 the code selects the single 32-row network and native 64-bit
-    min/max, but has not been measured there. [docs/src/avx512.md](docs/src/avx512.md)
-    describes what remains to be measured, and `bench/avx512.jl` measures it.
+- Tuned on two x86 machines only: an AVX2 laptop and an AVX-512 Xeon (Ice
+  Lake-SP). Other architectures need tuning data; see
+  [Tuning data from your machine](docs/src/measuring.md).
+  - CPUs without AVX2, and ARM, get SIMD.jl's portable lowering. It is correct
+    (CI runs the tests with `SIMD_JL_GENERIC=1` and on Apple silicon), but on
+    x86 about 4× slower than the AVX2 kernels; ARM speed is not measured yet.
 - No `by` or `lt` keywords.
 - `simdsort!` on the six primitive types is not stable. This only matters for
   distinguishable equal keys, such as NaNs with different payloads.

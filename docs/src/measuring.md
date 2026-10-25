@@ -14,7 +14,7 @@ want other choices. Data from these would help most:
 | Intel client hybrids (Alder/Raptor/Arrow Lake, Meteor Lake) | AVX2 with performance and efficiency cores; the thread scaling and the task grain were tuned on one such part only. |
 | AMD Zen 2 and Zen 3 | AVX2 with different shuffle and gather costs (the permutation-table partition step uses `vpermd`). |
 | Older AVX-512 (Skylake-SP, Cascade Lake) | The strongest clock reduction for 512-bit instructions: may be better off at 256 bits. |
-| ARM (Apple M-series, AWS Graviton, Ampere) | No x86 permutation tables: SIMD.jl's generic lowering, so far only checked for correctness. |
+| ARM (Apple M-series, AWS Graviton, Ampere) | No x86 permutation tables: SIMD.jl's generic lowering, so far only checked for correctness (CI tests on Apple silicon). |
 | Machines with more than 56 cores or more NUMA nodes | The sample-sort threshold and the many-thread behaviour. |
 
 To collect the data, run in a Julia started with all threads:
