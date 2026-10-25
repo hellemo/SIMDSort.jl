@@ -697,6 +697,17 @@ middle bits, 0.118 s with the earlier per-element dictionary lookups); on the
 Xeon at 56 threads 0.022 s before the hash change, against 0.028 s for
 ChapelSort.
 
+*Possible follow-up: GC at many tasks.* After the hash change the Xeon takes
+0.018 s at 56 threads (best), but rounds with a garbage collection take up to
+0.059 s: the 56 count tables are 4–8 MB each (300–450 MB per sort) and hold
+`Symbol` references, so the GC counts and scans them. Smaller tables were
+measured and dropped (a third or half full: 13–35% slower with 1000
+distinct, no gain with 10^5). The fix would be tables of addresses
+(`UInt64`) from the malloc arena, reused across sorts, with
+`unsafe_pointer_to_objref` turning the distinct addresses back into symbols:
+safe in practice (symbols are never freed, as the hashing already assumes),
+but one more unsafe spot for §10.
+
 **Other numbers and composite types.**
 
 | Type | Key |
