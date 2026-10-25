@@ -54,6 +54,8 @@ const CASES = [
     ("Int128 2^20", () -> rand(rng, Int128, 2^20), :sort),
     ("Pair{Int32,Int64} 2^20", () -> [rand(rng, Int32) => rand(rng, Int64) for _ in 1:2^20], :sort),
     ("Symbol 2^20", () -> rand(rng, SYMS, 2^20), :sort),
+    ("BigInt sortperm 2^18", () -> [big(rand(rng, Int128)) * big(rand(rng, Int128))^rand(rng, 0:2) for _ in 1:2^18], :perm),
+    ("BigFloat 2^18", () -> BigFloat.(randn(rng, 2^18)) .* big(10.0) .^ rand(rng, -20:20, 2^18), :sort),
     # The sample-sort top level, forced on (by default only with many tasks).
     ("Int64 2^$L dist", () -> rand(rng, Int64, 2^L), :dist),
     ("Float64 2^$L dist", () -> randn(rng, 2^L), :dist),

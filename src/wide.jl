@@ -72,7 +72,9 @@ end
 # --- byte encodings ------------------------------------------------------------
 
 # The number of 64-bit limbs of |x| (0 for 0).
-nlimbs(x::BigInt) = iszero(x) ? 0 : cld(Int(Base.GMP.MPZ.sizeinbase(x, 2)), 64)
+nlimbs(x::BigInt) = Base.GMP.Limb === UInt64 ?
+    Int(ccall((:__gmpz_size, Base.GMP.libgmp), Csize_t, (Ref{BigInt},), x)) :
+    iszero(x) ? 0 : cld(Int(Base.GMP.MPZ.sizeinbase(x, 2)), 64)
 
 # x as 8 big-endian bytes at bytes[pos+1:pos+8].
 @inline function put64!(bytes::Vector{UInt8}, pos::Int, x::UInt64)
@@ -82,44 +84,60 @@ nlimbs(x::BigInt) = iszero(x) ? 0 : cld(Int(Base.GMP.MPZ.sizeinbase(x, 2)), 64)
     return bytes
 end
 
-# The magnitude of x as nbytes big-endian bytes at bytes[pos+1:pos+nbytes],
-# right-aligned (GMP's documented mpz_export; |x| < 2^(8nbytes)), complemented
-# if neg.
-function put_magnitude!(bytes::Vector{UInt8}, pos::Int, x::BigInt, nbytes::Int, neg::Bool)
-    used = Base.GMP.MPZ.sizeinbase(x, 256)
-    iszero(x) && (used = 0)
-    fill!(view(bytes, pos+1:pos+nbytes-used), 0x00)
-    if used > 0
-        GC.@preserve bytes ccall((:__gmpz_export, Base.GMP.libgmp), Ptr{Cvoid},
-                                 (Ptr{UInt8}, Ptr{Csize_t}, Cint, Csize_t, Cint, Csize_t, Ref{BigInt}),
-                                 pointer(bytes, pos + nbytes - used + 1), C_NULL, 1, 1, 1, 0, x)
+# The magnitude of x (k = nlimbs(x) limbs) as 8k big-endian bytes at
+# bytes[pos+1:pos+8k], complemented if neg. With 64-bit GMP limbs (64-bit
+# platforms) limb by limb through GMP's documented mpz_getlimbn; otherwise
+# with mpz_export, which writes whole 64-bit words, most significant first,
+# big-endian, but is generic and costs about twice as much per number.
+function put_magnitude!(bytes::Vector{UInt8}, pos::Int, x::BigInt, k::Int, neg::Bool)
+    k == 0 && return bytes
+    checkbounds(bytes, pos+1:pos+8k)
+    if Base.GMP.Limb === UInt64
+        for j in 1:k
+            limb = ccall((:__gmpz_getlimbn, Base.GMP.libgmp), UInt64, (Ref{BigInt}, Clong), x, k - j)
+            put64!(bytes, pos + 8(j - 1), neg ? ~limb : limb)
+        end
+        return bytes
     end
+    GC.@preserve bytes ccall((:__gmpz_export, Base.GMP.libgmp), Ptr{Cvoid},
+                             (Ptr{UInt8}, Ptr{Csize_t}, Cint, Csize_t, Cint, Csize_t, Ref{BigInt}),
+                             pointer(bytes, pos + 1), C_NULL, 1, 8, 1, 0, x)
     if neg
-        @inbounds for k in pos+1:pos+nbytes
-            bytes[k] = ~bytes[k]
+        @inbounds for j in pos+1:pos+8k
+            bytes[j] = ~bytes[j]
         end
     end
     return bytes
 end
 
+# Encoding runs in parallel over chunks of the vector from this many elements.
+const ENCODE_PAR_MIN = 1 << 14
+
 # BigInt: an 8-byte header 2^63 + nlimbs (≥ 0) or 2^63 - nlimbs (< 0), then the
 # magnitude limbs from the most significant, complemented for negative numbers.
 # A longer magnitude is larger (positive) or smaller (negative); equal lengths
 # compare limb by limb.
-function encode(v::Vector{BigInt})
+function encode(v::Vector{BigInt}, ntasks::Int = 1)
     n = length(v)
+    ks = Vector{Int}(undef, n)
+    tforeach(n, ntasks; minlen = ENCODE_PAR_MIN) do r
+        for i in r
+            ks[i] = nlimbs(v[i])
+        end
+    end
     start = Vector{Int}(undef, n + 1)
     start[1] = 0
     for i in 1:n
-        start[i+1] = start[i] + 8 + 8 * nlimbs(v[i])
+        start[i+1] = start[i] + 8 + 8 * ks[i]
     end
     bytes = Vector{UInt8}(undef, start[end])
-    for i in 1:n
-        x = v[i]
-        k = nlimbs(x)
-        neg = x < 0
-        put64!(bytes, start[i], neg ? (UInt64(1) << 63) - UInt64(k) : (UInt64(1) << 63) + UInt64(k))
-        put_magnitude!(bytes, start[i] + 8, x, 8k, neg)
+    tforeach(n, ntasks; minlen = ENCODE_PAR_MIN) do r
+        for i in r
+            x, k = v[i], ks[i]
+            neg = signbit(x)
+            put64!(bytes, start[i], neg ? (UInt64(1) << 63) - UInt64(k) : (UInt64(1) << 63) + UInt64(k))
+            put_magnitude!(bytes, start[i] + 8, x, k, neg)
+        end
     end
     return bytes, start
 end
@@ -131,14 +149,21 @@ end
 #   -Inf: 1, negative: 2^62 - (E + 2^40), -0: 2^62, +0: 2^62 + 1,
 #   positive: 2^62 + 2 + (E + 2^40), +Inf: 2^63, NaN: 2^64 - 1
 # with E the binary exponent (x = 0.1xxx₂ × 2^E).
-function encode(v::Vector{BigFloat})
+function encode(v::Vector{BigFloat}, ntasks::Int = 1)
     n = length(v)
     L = maximum(x -> cld(precision(x), 64), v; init = 1)
     w = 8 + 8L
     bytes = zeros(UInt8, n * w)
     start = collect(0:w:n*w)
-    z = BigInt()
-    for i in 1:n
+    tforeach(n, ntasks; minlen = ENCODE_PAR_MIN) do r
+        encode_floats!(bytes, start, v, r, L)
+    end
+    return bytes, start
+end
+
+function encode_floats!(bytes, start, v::Vector{BigFloat}, r::UnitRange{Int}, L::Int)
+    z = BigInt()                               # the significand, reused
+    for i in r
         x = v[i]
         pos = start[i]
         if isnan(x)
@@ -151,19 +176,20 @@ function encode(v::Vector{BigFloat})
             e = ccall((:mpfr_get_z_2exp, Base.MPFR.libmpfr), Clong, (Ref{BigInt}, Ref{BigFloat}), z, x)
             p = precision(x)
             E = Int(e) + p                     # x = (z / 2^p) × 2^E, |z| in [2^(p-1), 2^p)
-            neg = x < 0
+            neg = signbit(x)
             put64!(bytes, pos, neg ? (UInt64(1) << 62) - UInt64(E + (1 << 40)) :
                                      (UInt64(1) << 62) + 2 + UInt64(E + (1 << 40)))
-            m = abs(z) << (64L - p)            # top-aligned in L limbs
-            put_magnitude!(bytes, pos + 8, m, 8L, neg)
+            # Top-aligned in L limbs, in place: |z| in [2^(64L-1), 2^64L).
+            ccall((:__gmpz_mul_2exp, Base.GMP.libgmp), Cvoid, (Ref{BigInt}, Ref{BigInt}, Culong), z, z, 64L - p)
+            put_magnitude!(bytes, pos + 8, z, L, neg)
         end
     end
-    return bytes, start
+    return nothing
 end
 
 function simdsortperm(v::Vector{T}; rev::Bool=false, ntasks::Integer=1) where {T<:Union{BigInt,BigFloat}}
     length(v) <= 1 && return collect(1:length(v))
-    bytes, start = encode(v)
+    bytes, start = encode(v, Int(ntasks))
     GC.@preserve bytes begin
         return refine!(EncodedKeys(bytes, start, rev), collect(1:length(v)), 0, Int(ntasks))
     end

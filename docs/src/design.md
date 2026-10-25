@@ -872,7 +872,14 @@ alias-annotated stores.
   strings, and slower than one thread on 56 threads.
 - `perm.jl`: a `Symbol`'s name is read through a pointer (it has no code
   units; symbols are never freed), and its length with `strlen`.
-- `wide.jl`: BigInt/BigFloat limbs through GMP's documented `mpz_export`.
+- `wide.jl`: BigInt/BigFloat limbs through GMP's documented `mpz_size` and
+  `mpz_getlimbn` (`mpz_export` where limbs are 32-bit). Encoding runs in
+  parallel over chunks. Per number this costs more than reading the limbs
+  directly, as before: BigInt `sortperm` of 10^6 is 9–20% slower on one
+  thread than with `unsafe_load` of the limbs, and 37% faster on 8 threads
+  (parallel encoding). A first `mpz_export` version, serial, was 2.4× slower
+  on BigInt and 1.5× on BigFloat; the A/B gate had no bignum case, so it
+  went unnoticed until the README benchmarks (it has them now).
 
 Removed:
 - the array of raw string pointers;
