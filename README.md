@@ -135,29 +135,36 @@ single-threaded and the fastest 8-thread result are bold.
 <!-- table:main -->
 | **case**                         | **Base 1 thr** | **ChapelSort 1 thr** | **SIMDSort 1 thr** | **x86-simd-sort 1 thr** | **vqsort 1 thr** | **ChapelSort 8 thr** | **SIMDSort 8 thr** | **x86-simd-sort 8 thr** |
 |:---------------------------------|---------------:|---------------------:|-------------------:|------------------------:|-----------------:|---------------------:|-------------------:|------------------------:|
-| UInt64, 2^27                     |          3.132 |                1.533 |          **1.242** |                   2.071 |            1.726 |            **0.332** |              0.427 |                   0.574 |
-| Int64, 2^26                      |          1.589 |                0.855 |          **0.531** |                   0.806 |            0.747 |                0.183 |          **0.175** |                   0.241 |
-| Float64 (randn), 2^26            |          1.666 |                1.017 |          **0.542** |                   0.579 |            0.788 |                0.209 |          **0.178** |                   0.183 |
-| UInt32, 2^26                     |          0.551 |                0.450 |          **0.271** |                   0.323 |            0.313 |                0.094 |          **0.085** |                   0.101 |
-| Int32, 2^26                      |          0.540 |                0.495 |          **0.269** |                   0.336 |            0.302 |                0.108 |          **0.086** |                   0.105 |
-| Float32 (randn), 2^26            |          0.779 |                0.513 |          **0.304** |                   0.331 |            0.327 |                0.110 |          **0.093** |                   0.100 |
-| UInt64 in 0:1000, 2^26           |          0.084 |                0.087 |          **0.064** |                   0.322 |            0.285 |                0.030 |          **0.024** |                   0.140 |
-| UInt64, 1000 random values, 2^26 |          1.635 |                1.025 |          **0.126** |                   0.338 |            0.279 |                0.132 |          **0.036** |                   0.141 |
-| UInt64 sorted, 2^26              |          0.031 |                0.031 |          **0.030** |                   1.007 |            0.751 |            **0.009** |              0.029 |                   0.281 |
-| UInt64 reversed, 2^26            |          0.056 |                0.058 |          **0.054** |                   0.998 |            0.757 |            **0.021** |              0.056 |                   0.276 |
+| UInt64, 2^27                     |          3.084 |                1.354 |          **1.140** |                   1.827 |            1.546 |            **0.305** |              0.399 |                   0.531 |
+| Int64, 2^26                      |          1.495 |                0.800 |          **0.497** |                   0.742 |            0.696 |                0.175 |          **0.166** |                   0.232 |
+| Float64 (randn), 2^26            |          1.519 |                0.954 |          **0.508** |                   0.536 |            0.735 |                0.197 |          **0.172** |                   0.173 |
+| UInt32, 2^26                     |          0.481 |                0.438 |          **0.256** |                   0.300 |            0.282 |                0.089 |          **0.082** |                   0.092 |
+| Int32, 2^26                      |          0.480 |                0.469 |          **0.258** |                   0.312 |            0.290 |                0.102 |          **0.084** |                   0.094 |
+| Float32 (randn), 2^26            |          0.663 |                0.490 |          **0.280** |                   0.307 |            0.310 |                0.107 |          **0.089** |                   0.095 |
+| UInt64 in 0:1000, 2^26           |          0.077 |                0.081 |          **0.061** |                   0.305 |            0.255 |                0.033 |          **0.020** |                   0.131 |
+| UInt64, 1000 random values, 2^26 |          1.548 |                0.926 |          **0.111** |                   0.314 |            0.267 |                0.123 |          **0.041** |                   0.134 |
+| UInt64 sorted, 2^26              |          0.027 |                0.028 |          **0.025** |                   0.913 |            0.684 |                0.009 |          **0.008** |                   0.266 |
+| UInt64 reversed, 2^26            |          0.052 |                0.054 |          **0.051** |                   0.914 |            0.660 |                0.021 |          **0.019** |                   0.256 |
 | Int32, 2^20                      |          0.005 |                0.007 |          **0.003** |                   0.003 |            0.003 |                0.002 |          **0.001** |                   0.002 |
 <!-- /table:main -->
 
 - **One thread:** fastest of all measured sorts for every numeric type, and for
   duplicates and presorted inputs.
-  - Against the best C++ sort: Float64 0.542 vs 0.579 s (x86-simd-sort), Int32
-    0.269 vs 0.302 s (vqsort), UInt64 1.24 vs 1.73 s (vqsort).
+  - Against the best C++ sort: Float64 0.508 vs 0.536 s (x86-simd-sort), Int32
+    0.258 vs 0.290 s (vqsort), UInt64 1.14 vs 1.55 s (vqsort).
   - Few distinct values: small ranges are counted, other few-distinct inputs are
-    counted in a hash table. 1000 random `UInt64` values: 0.126 s, against 0.279
+    counted in a hash table. 1000 random `UInt64` values: 0.111 s, against 0.267
     for vqsort.
-- **Eight threads:** fastest for `Int64`, `Float64`, the 32-bit types and
-  duplicate-heavy inputs. ChapelSort's parallel radix sort leads for `UInt64` at
-  2^27 keys and for presorted inputs.
+- **Eight threads:** fastest for `Int64`, `Float64`, the 32-bit types,
+  duplicate-heavy and presorted inputs. ChapelSort's parallel radix sort leads
+  for `UInt64` at 2^27 keys (0.305 vs 0.399 s), where the laptop's memory
+  bandwidth is the limit.
+- **Many cores:** on a 2 × 28-core Xeon Gold 6348 (AVX-512) at 56 threads,
+  `Int64` 2^26 takes 0.053 s (ChapelSort 0.078, x86-simd-sort 0.133) and
+  `Float64` 0.060 s (0.093, 0.129): from 16 threads and large inputs a
+  sample-sort step replaces the top partition levels, which stop scaling
+  (docs/src/design.md §7j). ChapelSort still leads for `UInt64` 2^27 (0.123 vs
+  0.151 s).
 
 ![Duplicates and presorted inputs](docs/src/assets/special.svg)
 
@@ -171,50 +178,53 @@ rounds:
 <!-- table:types -->
 | **case, operation**                   | **Base 1 thr** | **ChapelSort 1 thr** | **SIMDSort 1 thr** | **ChapelSort 8 thr** | **SIMDSort 8 thr** |
 |:--------------------------------------|---------------:|---------------------:|-------------------:|---------------------:|-------------------:|
-| String, random, length 8–20, sort     |          5.588 |                1.482 |          **0.794** |            **0.409** |              0.412 |
-| String, random, length 8–20, sortperm |         13.790 |                1.796 |          **0.641** |                0.490 |          **0.215** |
-| String, h2o id3 (id%010d), sort       |          3.519 |            **1.270** |              1.894 |            **0.416** |              0.618 |
-| String, h2o id3 (id%010d), sortperm   |          8.217 |            **1.663** |              1.753 |                0.616 |          **0.454** |
-| Symbol, 10^5 distinct, sort           |          1.132 |                0.298 |          **0.161** |            **0.063** |              0.145 |
-| Symbol, 10^5 distinct, sortperm       |          3.709 |                0.509 |          **0.411** |            **0.234** |              0.276 |
-| Int128, sort                          |          0.426 |                0.281 |          **0.198** |                0.074 |          **0.047** |
-| Int128, sortperm                      |          1.916 |                0.456 |          **0.242** |                0.109 |          **0.105** |
-| UInt256 (BitIntegers), sort           |          0.706 |                0.371 |          **0.279** |                0.100 |          **0.084** |
-| UInt256 (BitIntegers), sortperm       |          3.137 |                0.643 |          **0.251** |                0.150 |          **0.112** |
-| Double64 (DoubleFloats), sort         |          0.998 |                0.738 |          **0.285** |                0.152 |          **0.059** |
-| Double64 (DoubleFloats), sortperm     |          2.682 |                0.561 |          **0.354** |            **0.143** |              0.236 |
-| Float128 (Quadmath), sort             |          2.816 |                0.398 |          **0.241** |                0.100 |          **0.069** |
-| Float128 (Quadmath), sortperm         |          8.838 |                0.523 |          **0.364** |            **0.133** |              0.210 |
-| Float64x2 (MultiFloats), sort         |          0.827 |                0.746 |          **0.273** |                0.166 |          **0.065** |
-| Float64x2 (MultiFloats), sortperm     |          4.184 |                0.505 |          **0.296** |            **0.125** |              0.172 |
-| Float64x4 (MultiFloats), sort         |          0.074 |                0.050 |          **0.030** |                0.013 |          **0.009** |
-| Float64x4 (MultiFloats), sortperm     |          0.386 |                0.063 |          **0.016** |                0.016 |          **0.012** |
-| Date, sort                            |          0.185 |                0.081 |          **0.053** |                0.025 |          **0.020** |
-| Date, sortperm                        |          1.638 |            **0.148** |              0.261 |            **0.040** |              0.111 |
-| DateTime, sort                        |          0.237 |                0.206 |          **0.068** |                0.041 |          **0.022** |
-| DateTime, sortperm                    |          1.542 |                0.368 |          **0.267** |            **0.077** |              0.119 |
-| Tuple{Int64,Float64}, sort            |          0.744 |                0.541 |          **0.231** |                0.122 |          **0.057** |
-| Tuple{Int64,Float64}, sortperm        |          2.584 |                0.596 |          **0.345** |                0.152 |          **0.135** |
-| Pair{Int32,Int64}, sort               |          0.462 |                0.272 |          **0.200** |                0.076 |          **0.053** |
-| Pair{Int32,Int64}, sortperm           |          2.251 |                0.458 |          **0.283** |            **0.112** |              0.114 |
-| Tuple{Int64,String}, sort             |          0.699 |                0.515 |          **0.337** |            **0.154** |              0.209 |
-| Tuple{Int64,String}, sortperm         |          1.719 |                0.346 |          **0.296** |            **0.136** |              0.193 |
-| VersionNumber, sort                   |          0.149 |            **0.061** |              0.066 |                0.044 |          **0.040** |
-| VersionNumber, sortperm               |          0.297 |            **0.049** |              0.053 |            **0.029** |              0.034 |
-| BigInt (\~128-384 bits), sort         |          0.512 |                0.170 |          **0.148** |                0.108 |          **0.104** |
-| BigInt (\~128-384 bits), sortperm     |          1.088 |                0.214 |          **0.136** |            **0.104** |              0.123 |
-| BigFloat (256 bits), sort             |          0.578 |                0.216 |          **0.150** |                0.104 |          **0.101** |
-| BigFloat (256 bits), sortperm         |          1.063 |                0.229 |          **0.142** |            **0.103** |              0.109 |
+| String, random, length 8–20, sort     |          4.916 |                1.373 |          **0.707** |                0.304 |          **0.235** |
+| String, random, length 8–20, sortperm |         11.578 |                1.739 |          **0.618** |                0.508 |          **0.159** |
+| String, h2o id3 (id%010d), sort       |          3.199 |            **1.159** |              1.749 |            **0.367** |              0.495 |
+| String, h2o id3 (id%010d), sortperm   |          7.138 |            **1.512** |              1.587 |                0.672 |          **0.365** |
+| Symbol, 10^5 distinct, sort           |          1.082 |                0.298 |          **0.042** |                0.096 |          **0.029** |
+| Symbol, 10^5 distinct, sortperm       |          3.301 |                0.468 |          **0.348** |                0.217 |          **0.117** |
+| Int128, sort                          |          0.410 |                0.273 |          **0.187** |                0.073 |          **0.056** |
+| Int128, sortperm                      |          1.688 |                0.426 |          **0.227** |                0.103 |          **0.071** |
+| UInt256 (BitIntegers), sort           |          0.655 |                0.345 |          **0.272** |            **0.085** |              0.092 |
+| UInt256 (BitIntegers), sortperm       |          2.853 |                0.604 |          **0.231** |                0.176 |          **0.079** |
+| Double64 (DoubleFloats), sort         |          0.930 |                0.705 |          **0.249** |                0.163 |          **0.068** |
+| Double64 (DoubleFloats), sortperm     |          2.346 |                0.520 |          **0.366** |            **0.141** |              0.200 |
+| Float128 (Quadmath), sort             |          2.590 |                0.390 |          **0.214** |                0.087 |          **0.067** |
+| Float128 (Quadmath), sortperm         |          7.756 |                0.502 |          **0.345** |            **0.121** |              0.173 |
+| Float64x2 (MultiFloats), sort         |          0.808 |                0.718 |          **0.266** |                0.158 |          **0.065** |
+| Float64x2 (MultiFloats), sortperm     |          3.933 |                0.461 |          **0.287** |                0.141 |          **0.117** |
+| Float64x4 (MultiFloats), sort         |          0.069 |                0.047 |          **0.028** |                0.011 |          **0.008** |
+| Float64x4 (MultiFloats), sortperm     |          0.296 |                0.057 |          **0.017** |                0.015 |          **0.008** |
+| Date, sort                            |          0.168 |                0.086 |          **0.051** |                0.024 |          **0.021** |
+| Date, sortperm                        |          1.528 |            **0.139** |              0.253 |            **0.037** |              0.085 |
+| DateTime, sort                        |          0.227 |                0.208 |          **0.067** |                0.036 |          **0.023** |
+| DateTime, sortperm                    |          1.556 |                0.324 |          **0.251** |            **0.079** |              0.082 |
+| Tuple{Int64,Float64}, sort            |          0.707 |                0.497 |          **0.217** |                0.113 |          **0.060** |
+| Tuple{Int64,Float64}, sortperm        |          2.298 |                0.560 |          **0.349** |                0.140 |          **0.109** |
+| Pair{Int32,Int64}, sort               |          0.441 |                0.254 |          **0.196** |                0.069 |          **0.060** |
+| Pair{Int32,Int64}, sortperm           |          1.969 |                0.445 |          **0.293** |                0.112 |          **0.094** |
+| Tuple{Int64,String}, sort             |          0.633 |                0.390 |          **0.299** |            **0.164** |              0.193 |
+| Tuple{Int64,String}, sortperm         |          1.409 |                0.355 |          **0.282** |            **0.133** |              0.171 |
+| VersionNumber, sort                   |          0.140 |            **0.061** |              0.071 |                0.043 |          **0.039** |
+| VersionNumber, sortperm               |          0.261 |            **0.045** |              0.058 |            **0.028** |              0.033 |
+| BigInt (\~128-384 bits), sort         |          0.431 |                0.139 |          **0.137** |                0.081 |          **0.052** |
+| BigInt (\~128-384 bits), sortperm     |          0.901 |                0.183 |          **0.166** |                0.092 |          **0.052** |
+| BigFloat (256 bits), sort             |          0.495 |                0.213 |          **0.128** |                0.085 |          **0.054** |
+| BigFloat (256 bits), sortperm         |          0.858 |                0.204 |          **0.118** |                0.089 |          **0.055** |
 <!-- /table:types -->
 
-- **`sortperm`:** SIMDSort wins most rows on one thread.
 - **`sort` for wide fixed-width types** (Int128, UInt256, Float128, Double64,
   MultiFloats, packed tuples and pairs): one sample-sort distribution pass, then
   cache-resident SIMD sorts of the buckets (docs/src/design.md §8). It used to go
   through a permutation and a gather.
-- **8 threads:** SIMDSort leads in 19 of 34 rows, including `sort` for
-  every fixed-width type. ChapelSort's radix sort leads in most 8-thread
-  `sortperm` rows and for strings and Symbols.
+- **One thread:** SIMDSort leads in 29 of 34 rows; ChapelSort in the h2o id
+  strings (fixed prefix, then digits), VersionNumber, and Date `sortperm`.
+- **8 threads:** SIMDSort leads in 25 of 34 rows, including random strings,
+  Symbols (counted in hash tables by address: 0.029 s against 0.096), BigInt
+  and BigFloat. ChapelSort's radix sort leads for the h2o id strings,
+  `Tuple{Int64,String}`, UInt256 `sort` (a tie) and some `sortperm` rows
+  (Double64, Float128, Date, DateTime, VersionNumber).
 
 ![sort speedup over Base](docs/src/assets/types_sort.svg)
 
@@ -222,8 +232,8 @@ rounds:
 
 ![Crossover between ChapelSort and SIMDSort](docs/src/assets/crossover.svg)
 
-The radix sort is faster only with 8 tasks, for 64-bit integer keys (and for
-`UInt64` mostly at ≥ 2^26 keys). The quicksort is faster for everything else,
+The radix sort is faster only with 4–8 tasks, for 64-bit integer keys
+(`UInt64` mostly at ≥ 2^26 keys, `Int64` at 2^27). The quicksort is faster for everything else,
 including all floats and all 32-bit keys. See docs/src/design.md §7.h.
 
 [docs/src/design.md §7](docs/src/design.md) has the profile breakdown, per-level costs,

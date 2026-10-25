@@ -18,7 +18,13 @@ README; the scripts are in `bench/` (`bench.jl`, `types.jl`, `crossover.jl`,
 
 ![Crossover between ChapelSort and SIMDSort](assets/crossover.svg)
 
-Results on a 2 × 28-core Xeon Gold 6348 (AVX-512) are summarized in
+Thread scaling on the laptop (AVX2, 8 threads) and on a 2 × 28-core Xeon
+Gold 6348 (AVX-512, 56 cores), same commit; dashed: SIMDSort with only one of
+its two top levels (quicksort, or the sample-sort step forced on):
+
+![Thread scaling on AVX2 and AVX-512](assets/scaling.svg)
+
+More results on the Xeon are summarized in
 [AVX-512](avx512.md); the design document's performance analysis
 ([Design](design.md), §7) has the per-level costs and the effect of each
 optimization.
