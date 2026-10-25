@@ -20,4 +20,5 @@ SIMDSort.has_orderwords
 ```@docs
 SIMDSort.instrumented
 SIMDSort.print_report
+SIMDSort.tuning_report
 ```

@@ -1,9 +1,5 @@
 # SIMDSort.jl
 
-*(Formerly SIMDQuickSort.jl: the vectorized quicksort is still the core for
-primitive numbers, but counting, hash counting, MSD radix refinement and a
-sample-sort step now handle other inputs and types.)*
-
 > [!WARNING]
 > SIMDSort.jl depends on an **unreleased fork of SIMD.jl**: branch
 > [`permute-compress`](https://github.com/hellemo/SIMD.jl/tree/permute-compress)
@@ -19,9 +15,11 @@ sample-sort step now handle other inputs and types.)*
 >
 > This will stay so until the changes are merged into SIMD.jl and released.
 
-An experimental vectorized quicksort in pure Julia. It is built on the SIMD.jl
-fork with runtime permutes and compress (`vpartition`, `vpermute`), branch
-[`permute-compress`](https://github.com/hellemo/SIMD.jl/tree/permute-compress).
+Experimental vectorized sorting in pure Julia: a vectorized quicksort for
+primitive numbers, with counting, hash counting, MSD radix refinement and a
+sample-sort step for other inputs, types and many threads. It is built on the
+SIMD.jl fork with runtime permutes and compress (`vpartition`, `vpermute`),
+branch [`permute-compress`](https://github.com/hellemo/SIMD.jl/tree/permute-compress).
 
 ```julia
 using SIMDSort
@@ -159,16 +157,39 @@ single-threaded and the fastest 8-thread result are bold.
   duplicate-heavy and presorted inputs. ChapelSort's parallel radix sort leads
   for `UInt64` at 2^27 keys (0.305 vs 0.399 s), where the laptop's memory
   bandwidth is the limit.
-- **Many cores and AVX-512:** on a 2 × 28-core Xeon Gold 6348 at 56
-  threads, `Int64` 2^26 takes 0.045 s (ChapelSort 0.083, x86-simd-sort 0.133),
-  `Float64` 0.061 s (0.097, 0.127) and `UInt64` 2^27 0.102 s (0.116, 0.275):
-  from 16 threads and large inputs a sample-sort step replaces the top
-  partition levels, which stop scaling (docs/src/design.md §7j). With AVX-512
-  the kernels use 512-bit vectors; on one thread SIMDSort then leads
-  x86-simd-sort for `Int64` and `UInt64`, and trails it by 3% for `Int32` and
-  11% for `Float64` (docs/src/avx512.md).
+- **Many cores and AVX-512:** see [below](#avx-512-and-many-cores).
 
 ![Duplicates and presorted inputs](docs/src/assets/special.svg)
+
+### AVX-512 and many cores
+
+Measured on a 2 × 28-core Intel Xeon Gold 6348 (Ice Lake-SP, AVX-512,
+2 NUMA nodes) with `bench/measure/scaling.jl`: best of 5 fresh inputs, seconds.
+With AVX-512 the kernels use 512-bit vectors (native compress, 16-row
+512-bit base-case networks), and `UInt64` needs no key map
+(docs/src/avx512.md). From 16 threads and large inputs a sample-sort step
+replaces the top partition levels, which stop scaling (docs/src/design.md §7j).
+
+<!-- table:xeon -->
+| **case**                       | **SIMDSort 1 thr** | **ChapelSort 1 thr** | **x86-simd-sort 1 thr** | **SIMDSort 56 thr** | **ChapelSort 56 thr** | **x86-simd-sort 56 thr** |
+|:-------------------------------|-------------------:|---------------------:|------------------------:|--------------------:|----------------------:|-------------------------:|
+| UInt64 2^27                    |          **1.445** |                3.005 |                   1.485 |           **0.102** |                 0.116 |                    0.275 |
+| Int64 2^26                     |          **0.704** |                1.696 |                   0.738 |           **0.045** |                 0.083 |                    0.133 |
+| Float64 randn 2^26             |              0.753 |                1.815 |               **0.674** |           **0.060** |                 0.097 |                    0.127 |
+| Int32 2^26                     |              0.357 |                1.094 |               **0.347** |           **0.034** |                 0.047 |                    0.063 |
+| Int128 10^7                    |          **0.270** |                0.445 |                       – |           **0.015** |                 0.021 |                        – |
+| Float64 sortperm 10^7          |          **0.296** |                0.499 |                       – |           **0.021** |                 0.022 |                        – |
+| String 8-20 sortperm 2\*10^6   |          **0.102** |                0.232 |                       – |           **0.012** |                 0.021 |                        – |
+| Symbol 10^5 distinct sort 10^7 |          **0.073** |                0.403 |                       – |           **0.017** |                 0.028 |                        – |
+<!-- /table:xeon -->
+
+![Thread scaling on AVX2 and AVX-512](docs/src/assets/scaling.svg)
+
+- **One thread:** SIMDSort leads x86-simd-sort for `Int64` (0.70 vs 0.74 s)
+  and `UInt64` (1.45 vs 1.49 s) and trails it for `Int32` (3%) and `Float64`
+  (11%: 512-bit floating point lowers the clock, docs/src/avx512.md).
+- **56 threads:** SIMDSort leads every case; the parallel quicksorts
+  (x86-simd-sort's included) stop scaling at about 16 threads.
 
 ### Other types
 
@@ -241,6 +262,14 @@ including all floats and all 32-bit keys. See docs/src/design.md §7.h.
 [docs/src/design.md §7](docs/src/design.md) has the profile breakdown, per-level costs,
 the effect of each optimization, the analysis of the remaining gaps, and the
 ideas that were rejected. `bench/profile.jl` reproduces the breakdown.
+
+### Tuning data from other machines
+
+The kernels and thresholds were tuned on the two machines above. On another
+processor (AMD Zen 4/5, newer Intel server parts, ARM, ...), please run
+`SIMDSort.tuning_report()` in a Julia started with all threads and send the
+file it writes with an issue; docs/src/measuring.md lists the processors
+where data would help most.
 
 ## Limitations
 

@@ -44,6 +44,7 @@ include("symbols.jl")
 include("msd.jl")
 include("wide.jl")
 include("compound.jl")
+include("tuning.jl")
 
 """
     simdsort!(v; rev=false, ntasks=1)

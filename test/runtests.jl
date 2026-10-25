@@ -431,6 +431,13 @@ end
         io = IOBuffer(); SIMDSort.print_report(io, r)
         @test occursin("msd_scatter", String(take!(io)))
         @test !SIMDSort.INSTR[]
+        # The tuning report runs and writes its sections (tiny inputs).
+        f = tempname()
+        @test SIMDSort.tuning_report(f; ntasks = 2, rounds = 1, sizelog = 12) == f
+        t = read(f, String)
+        @test occursin("features:", t) && occursin("time, Int64, 2, sample-sort", t) &&
+              occursin("String 8-20 sortperm", t) && SIMDSort.DIST_MODE[] === :auto
+        rm(f)
     end
 
     @testset "Dates, Tuples, Pairs, VersionNumber" begin

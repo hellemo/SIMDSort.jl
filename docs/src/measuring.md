@@ -1,5 +1,37 @@
 # Measuring
 
+## Tuning data from your machine
+
+SIMDSort's kernels and thresholds were tuned on two machines: an Intel Core
+Ultra 7 268V laptop (AVX2, 4 performance and 4 efficiency cores) and a
+2 × 28-core Intel Xeon Gold 6348 (Ice Lake-SP, AVX-512). Other processors may
+want other choices. Data from these would help most:
+
+| Processor | Why |
+|---|---|
+| AMD Zen 4 and Zen 5 (Ryzen 7000/9000, EPYC 9004/9005) | AVX-512 without the Intel clock reduction, but the compress-to-memory instruction that the 512-bit partition step uses for its right side is reported to be slow there; the 512-bit path may need a different store. |
+| Intel Sapphire/Emerald/Granite Rapids | Newer AVX-512 cores with a smaller clock penalty: does the 512-bit path gain more, and do floats still lag (docs: [AVX-512](avx512.md))? |
+| Intel client hybrids (Alder/Raptor/Arrow Lake, Meteor Lake) | AVX2 with performance and efficiency cores; the thread scaling and the task grain were tuned on one such part only. |
+| AMD Zen 2 and Zen 3 | AVX2 with different shuffle and gather costs (the permutation-table partition step uses `vpermd`). |
+| Older AVX-512 (Skylake-SP, Cascade Lake) | The strongest clock reduction for 512-bit instructions: may be better off at 256 bits. |
+| ARM (Apple M-series, AWS Graviton, Ampere) | No x86 permutation tables: SIMD.jl's generic lowering, so far only checked for correctness. |
+| Machines with more than 56 cores or more NUMA nodes | The sample-sort threshold and the many-thread behaviour. |
+
+To collect the data, run in a Julia started with all threads:
+
+```julia
+julia> using SIMDSort
+
+julia> SIMDSort.tuning_report()     # a minute or two
+"simdsort-tuning-myhost.txt"
+```
+
+The file holds the machine's description (CPU, caches, SIMD features, the
+vector width chosen), best and median times of a fixed set of sorts with one
+and with all threads (for the primitive types also with each top level
+forced), and the phase breakdown of each. Please send it with an issue on
+GitHub. Nothing else is collected.
+
 ## Comparing versions: `bench/ab.jl`
 
 Every refactoring and optimization step was checked by an interleaved A/B

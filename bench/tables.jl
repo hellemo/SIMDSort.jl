@@ -9,8 +9,8 @@
 #
 # The tables replace the text between `<!-- table:NAME -->` and
 # `<!-- /table:NAME -->` in README.md and docs/src/benchmarks.md. With
-# XEON_SCALING (bench/measure/scaling.jl on the AVX-512 server), the docs also
-# get its table at one and all threads.
+# XEON_SCALING (bench/measure/scaling.jl on the AVX-512 server), both also get
+# its table at one and all threads.
 
 using CSV, DataFrames, PrettyTables, Printf
 
@@ -93,7 +93,7 @@ end
 
 # The AVX-512 server's scaling.csv at one and all threads: SIMDSort (default),
 # ChapelSort and x86-simd-sort.
-function xeon_table(path)
+function xeon_table(path; backend = :html)
     df = CSV.read(path, DataFrame)
     nt = maximum(df.nthreads)
     methods = ["SIMDSort", "ChapelSort", "x86-simd-sort"]
@@ -104,7 +104,7 @@ function xeon_table(path)
         r = filter(x -> x.case == c && x.method == m && x.nthreads == t, df)
         nrow(r) == 1 && (times[i, j] = r.best[1])
     end
-    return render(cases, last.(cols), times, [1:3, 4:6]; backend = :html)
+    return render(cases, last.(cols), times, [1:3, 4:6]; backend)
 end
 
 # An HTML table as a raw block of a Documenter page (scrolls when wide).
@@ -120,15 +120,16 @@ end
 function main()
     tm, tt = main_table(), types_table()
     println(tm, "\n", tt)
+    xeon = get(ENV, "XEON_SCALING", "")
     text = read(README, String)
     text = splice_table(text, "main", tm)
     text = splice_table(text, "types", tt)
+    isempty(xeon) || (text = splice_table(text, "xeon", xeon_table(xeon; backend = :markdown)))
     write(README, text)
     println("updated ", README)
     text = read(DOCS, String)
     text = splice_table(text, "main", docs_block(main_table(:html)))
     text = splice_table(text, "types", docs_block(types_table(:html)))
-    xeon = get(ENV, "XEON_SCALING", "")
     isempty(xeon) || (text = splice_table(text, "xeon", docs_block(xeon_table(xeon))))
     write(DOCS, text)
     println("updated ", DOCS)
