@@ -227,12 +227,15 @@ end
 window_bits(pc, off::Int, ib::Int) = pc !== nothing && off < 128 ? min(64 - ib, 128 - off) : 64 - ib
 
 """
-    refine!(ks, perm, off, ntasks)
+    refine!(ks, perm, off, ntasks; isidentity = false)
 
 Reorder `perm` (positions whose keys agree on bits `[0, off)`, in a stable
-order) by the keys' bits from `off` on, stably.
+order) by the keys' bits from `off` on, stably. With `isidentity` (the top
+call, `perm == 1:n`) the sorted positions are written directly instead of
+looked up in `perm`: 10^7 random reads saved (a third of a Date sortperm).
 """
-function refine!(ks::KeySource, perm::AbstractVector{Int}, off::Int, ntasks::Int, pc = nothing)
+function refine!(ks::KeySource, perm::AbstractVector{Int}, off::Int, ntasks::Int, pc = nothing;
+                 isidentity::Bool = false)
     m = length(perm)
     m <= 1 && return perm
     if all_exhausted(ks, perm, off)
@@ -263,8 +266,14 @@ function refine!(ks::KeySource, perm::AbstractVector{Int}, off::Int, ntasks::Int
         count!(:window_sorts)
         count!(:window_keys, m)
         simdsort!(keys; ntasks)
-        old = alloc!(arena, Int, m)
-        @phase :window_gather begin
+        @phase :window_gather if isidentity
+            tforeach(m, ntasks) do r
+                @inbounds for j in r
+                    perm[j] = (keys[j] & mask) % Int + 1
+                end
+            end
+        else
+            old = alloc!(arena, Int, m)
             tforeach(m, ntasks) do r
                 @inbounds for j in r
                     old[j] = perm[j]
@@ -459,7 +468,7 @@ end
 
 function simdsortperm(v::KeyVector{T}; rev::Bool=false, ntasks::Integer=1) where {T<:SortTypes}
     length(v) <= 1 && return collect(1:length(v))
-    return refine!(NumKeys(v, rev), identity_perm(length(v), Int(ntasks)), 0, Int(ntasks))
+    return refine!(NumKeys(v, rev), identity_perm(length(v), Int(ntasks)), 0, Int(ntasks); isidentity = true)
 end
 
 function simdsortperm(v::Vector{T}; rev::Bool=false,
@@ -476,7 +485,8 @@ function simdsortperm(v::Vector{T}; rev::Bool=false,
         pc = alloc!(arena, UInt128, n)
         GC.@preserve v begin
             ks = ByteKeys(v, rev, Int(ntasks), len)
-            return refine!(ks, identity_perm(n, Int(ntasks)), 0, Int(ntasks), prefix_cache(ks, Int(ntasks), pc))
+            return refine!(ks, identity_perm(n, Int(ntasks)), 0, Int(ntasks), prefix_cache(ks, Int(ntasks), pc);
+                           isidentity = true)
         end
     finally
         release!(arena)

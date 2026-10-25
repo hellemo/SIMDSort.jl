@@ -34,7 +34,7 @@ iswideint(::Type{T}) where {T} =
 function simdsortperm(v::Vector{T}; rev::Bool=false, ntasks::Integer=1) where {T<:Union{Signed,Unsigned}}
     iswideint(T) || return sortperm(v; rev)
     length(v) <= 1 && return collect(1:length(v))
-    return refine!(WideIntKeys(v, rev), identity_perm(length(v), Int(ntasks)), 0, Int(ntasks))
+    return refine!(WideIntKeys(v, rev), identity_perm(length(v), Int(ntasks)), 0, Int(ntasks); isidentity = true)
 end
 
 # Order words of a wide integer: its unsigned form (sign bit flipped if signed),
@@ -191,7 +191,7 @@ function simdsortperm(v::Vector{T}; rev::Bool=false, ntasks::Integer=1) where {T
     length(v) <= 1 && return collect(1:length(v))
     bytes, start = encode(v, Int(ntasks))
     GC.@preserve bytes begin
-        return refine!(EncodedKeys(bytes, start, rev), collect(1:length(v)), 0, Int(ntasks))
+        return refine!(EncodedKeys(bytes, start, rev), collect(1:length(v)), 0, Int(ntasks); isidentity = true)
     end
 end
 
@@ -258,5 +258,5 @@ Stable sort permutation of multi-word keys; see [`WordKeys`](@ref).
 """
 function wordkeys_sortperm(w::AbstractVector{NTuple{M,UInt64}}; rev::Bool=false, ntasks::Integer=1) where {M}
     length(w) <= 1 && return collect(1:length(w))
-    return refine!(WordKeys{M}(w, rev), collect(1:length(w)), 0, Int(ntasks))
+    return refine!(WordKeys{M}(w, rev), collect(1:length(w)), 0, Int(ntasks); isidentity = true)
 end

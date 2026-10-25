@@ -112,7 +112,7 @@ end
 function symbol_ranks(syms::Vector{Symbol}, ntasks::Int)
     order = GC.@preserve syms begin
         ks = ByteKeys(syms, false, ntasks)
-        refine!(ks, collect(1:length(syms)), 0, ntasks, prefix_cache(ks, ntasks))
+        refine!(ks, collect(1:length(syms)), 0, ntasks, prefix_cache(ks, ntasks); isidentity = true)
     end
     return order        # syms[order] is sorted
 end

@@ -87,14 +87,21 @@ end
 @inline prevkey(x::Integer) = x - one(x)
 @inline prevkey(x::AbstractFloat) = prevfloat(x)
 
+# The pivot is the median of at most this many lanes of the medians of three:
+# with 16 lanes (32-bit keys, 512-bit vectors) the scalar sort of all of them
+# made the pivot step 17% slower than with 8, and 8 lanes are 72 sampled keys
+# as with 256-bit vectors.
+const MEDIAN_LANES = 8
+
 @inline function median_lane(v::Vec{N,T}) where {N,T}
-    t = Tuple(v)
-    # Insertion sort of N ≤ 16 scalars.
-    for i in 2:N, j in i:-1:2
+    t = ntuple(i -> v[i], Val(min(N, MEDIAN_LANES)))
+    L = length(t)
+    # Insertion sort of L ≤ 16 scalars.
+    for i in 2:L, j in i:-1:2
         t[j-1] <= t[j] && break
         t = Base.setindex(Base.setindex(t, t[j], j - 1), t[j-1], j)
     end
-    return t[(N + 1) ÷ 2]
+    return t[(L + 1) ÷ 2]
 end
 
 function vextrema(p::KeyRef{T}, n::Int) where {T}

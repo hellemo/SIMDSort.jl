@@ -32,6 +32,7 @@ const VARIANTS = [
     ("BIGPIVOT_MINN=2^21", "sort.jl", "BIGPIVOT_MINN", "1 << 21"),
     ("MAXROWS=16", "network.jl", "MAXROWS", "16"),
     ("no zigzag", "network.jl", "ZIGZAG", "false"),
+    ("MEDIAN_LANES=16", "sort.jl", "MEDIAN_LANES", "16"),
 ]
 
 include("variants.jl")
