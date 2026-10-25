@@ -59,14 +59,27 @@ function simdsort!(v::Vector{T}; rev::Bool=false, ntasks::Integer=1) where {T<:U
 end
 
 # The order words of every element, computed by up to `ntasks` tasks.
-function words_of(f::F, v::AbstractVector, ntasks::Int) where {F}
-    w = Vector{typeof(f(first(v)))}(undef, length(v))
+words_of(f::F, v::AbstractVector, ntasks::Int) where {F} =
+    words_of!(Vector{typeof(f(first(v)))}(undef, length(v)), f, v, ntasks)
+
+function words_of!(w, f::F, v::AbstractVector, ntasks::Int) where {F}
     tforeach(length(v), ntasks) do r
         @inbounds for i in r
             w[i] = f(v[i])
         end
     end
     return w
+end
+
+# g(words of v), the words in a buffer outside the GC heap (they are plain
+# bits; on the GC heap their hundreds of MB triggered collections).
+function with_words(g::G, f::F, v::AbstractVector, ntasks::Int) where {G,F}
+    arena = ScratchArena()
+    try
+        return g(words_of!(alloc!(arena, typeof(f(first(v))), length(v)), f, v, ntasks))
+    finally
+        release!(arena)
+    end
 end
 
 # --- byte encodings ------------------------------------------------------------
@@ -191,7 +204,8 @@ function simdsortperm(v::Vector{T}; rev::Bool=false, ntasks::Integer=1) where {T
     length(v) <= 1 && return collect(1:length(v))
     bytes, start = encode(v, Int(ntasks))
     GC.@preserve bytes begin
-        return refine!(EncodedKeys(bytes, start, rev), collect(1:length(v)), 0, Int(ntasks); isidentity = true)
+        return refine!(EncodedKeys(bytes, start, rev), identity_perm(length(v), Int(ntasks)), 0, Int(ntasks);
+                       isidentity = true)
     end
 end
 
@@ -258,5 +272,5 @@ Stable sort permutation of multi-word keys; see [`WordKeys`](@ref).
 """
 function wordkeys_sortperm(w::AbstractVector{NTuple{M,UInt64}}; rev::Bool=false, ntasks::Integer=1) where {M}
     length(w) <= 1 && return collect(1:length(w))
-    return refine!(WordKeys{M}(w, rev), collect(1:length(w)), 0, Int(ntasks); isidentity = true)
+    return refine!(WordKeys{M}(w, rev), identity_perm(length(w), Int(ntasks)), 0, Int(ntasks); isidentity = true)
 end

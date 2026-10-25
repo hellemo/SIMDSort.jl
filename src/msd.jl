@@ -213,7 +213,7 @@ Small inputs, and too few distinct leading words: the permutation of the
 windowed sort, applied in place.
 """
 sort_by_words_perm!(v, f::F, rev::Bool, ntasks::Int) where {F} =
-    permute_by!(v, wordkeys_sortperm(words_of(f, v, ntasks); rev, ntasks), ntasks)
+    permute_by!(v, with_words(w -> wordkeys_sortperm(w; rev, ntasks), f, v, ntasks), ntasks)
 
 # Finish buckets bs with one pair of scratch buffers.
 

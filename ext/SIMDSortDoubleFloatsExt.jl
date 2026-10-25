@@ -1,29 +1,19 @@
 # Double64 and Double32 keys: the high word, then the low word, each in the
-# order-preserving unsigned form, packed into one UInt128 (UInt64) and sorted
-# with simdsortperm. DoubleFloats compares the high words with `<` (so -0.0 and
+# order-preserving unsigned form, as order words (sort and sortperm both take
+# the generic path for types with orderwords, which computes them in
+# parallel). DoubleFloats compares the high words with `<` (so -0.0 and
 # 0.0 tie) and the low words with `<`; zeros are canonicalized to match. NaNs
 # are put last, as for Float64. (DoubleFloats' own `isless` is not a total order
 # with NaNs, so Base.sort has no defined result to match there.)
 module SIMDSortDoubleFloatsExt
 
 using SIMDSort, DoubleFloats
-import SIMDSort: simdsortperm, orderwords, has_orderwords
+import SIMDSort: orderwords, has_orderwords
 
 const DF = Union{DoubleFloat{Float64},DoubleFloat{Float32}}
 
 @inline word(::Type{U}, x::AbstractFloat) where {U} = SIMDSort.ukey(U, iszero(x) ? zero(x) : x)
 
-function packed(v::Vector{DoubleFloat{T}}) where {T}
-    W = 8sizeof(T)
-    U = T === Float64 ? UInt64 : UInt32
-    P = T === Float64 ? UInt128 : UInt64
-    return P[isnan(x) ? typemax(P) : (P(word(U, x.hi)) << W) | P(word(U, x.lo)) for x in v]
-end
-
-simdsortperm(v::Vector{<:DF}; rev::Bool=false, ntasks::Integer=1) =
-    simdsortperm(packed(v); rev, ntasks)
-
-# The words for simdsort! (the distribution pass of SIMDSort.sort_by_words!).
 @inline function orderwords(x::DoubleFloat{Float64})
     isnan(x) && return (typemax(UInt64), typemax(UInt64))
     return (word(UInt64, x.hi), word(UInt64, x.lo))

@@ -461,7 +461,7 @@ vectorized quicksort; other inputs fall back to `sortperm`.
 function simdsortperm(v::AbstractVector; rev::Bool=false, ntasks::Integer=1)
     if has_orderwords(eltype(v))
         length(v) <= 1 && return collect(1:length(v))
-        return wordkeys_sortperm(words_of(orderwords, v, Int(ntasks)); rev, ntasks)
+        return with_words(w -> wordkeys_sortperm(w; rev, ntasks), orderwords, v, Int(ntasks))
     end
     return sortperm(v; rev)
 end
