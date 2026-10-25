@@ -220,6 +220,12 @@ end
     return keybits(ks, @inbounds(perm[j]), off, K)
 end
 
+# The window width at bit off with ib position bits: 64 - ib, but a window
+# that starts in the prefix cache ends with it, so that it is read sequentially,
+# not through the strings (for keys up to 16 bytes it then holds all their
+# remaining bits).
+window_bits(pc, off::Int, ib::Int) = pc !== nothing && off < 128 ? min(64 - ib, 128 - off) : 64 - ib
+
 """
     refine!(ks, perm, off, ntasks)
 
@@ -234,12 +240,12 @@ function refine!(ks::KeySource, perm::AbstractVector{Int}, off::Int, ntasks::Int
     end
     m <= PERM_SMALL && return small_refine!(ks, perm, off, pc)
     ib = 8sizeof(Int) - leading_zeros(m - 1)       # bits for local positions
-    K = 64 - ib
     mask = (one(UInt64) << ib) - one(UInt64)
     arena = ScratchArena()
     keys = alloc!(arena, UInt64, m)
     try
         while true
+            K = window_bits(pc, off, ib)
             # The windows, and the bits in which any of them differs from the
             # first. Skip bits that all keys of the run share (long common
             # prefixes, as in "id%010d"): a window with no differences needs no sort.
@@ -253,6 +259,7 @@ function refine!(ks::KeySource, perm::AbstractVector{Int}, off::Int, ntasks::Int
             c < 8 && break
             off += c
         end
+        K = window_bits(pc, off, ib)
         count!(:window_sorts)
         count!(:window_keys, m)
         simdsort!(keys; ntasks)
@@ -273,9 +280,13 @@ function refine!(ks::KeySource, perm::AbstractVector{Int}, off::Int, ntasks::Int
         runs = @phase :window_runs equal_runs(keys, ib, ntasks)
         isempty(runs) && return perm
         next = off + K
-        # Each run gets its own slice of the prefix cache, gathered in its new order.
+        # The runs' prefix cache entries in the new order, in one buffer (only
+        # the runs: with distinct windows most keys are in none); each run gets
+        # its slice.
         usepc = pc !== nothing && next < 128
-        sub(r) = usepc ? UInt128[@inbounds pc[(keys[j] & mask) % Int + 1] for j in r] : nothing
+        pcb = usepc ? alloc!(arena, UInt128, m) : nothing
+        usepc && gather_runs!(pcb, pc, keys, mask, runs, ntasks)
+        sub(r) = usepc ? view(pcb, r) : nothing
         if ntasks <= 1 || length(runs) == 1
             for r in runs
                 refine!(ks, view(perm, r), next, length(r) > PERM_PAR_MIN ? ntasks : 1, sub(r))
@@ -294,6 +305,16 @@ function refine!(ks::KeySource, perm::AbstractVector{Int}, off::Int, ntasks::Int
     finally
         release!(arena)
     end
+end
+
+# dst[j] = src[old position of j] for the j in the runs.
+function gather_runs!(dst, src, keys, mask::UInt64, runs, ntasks::Int)
+    tforeach(length(runs), ntasks; minlen = 1 << 10) do rr
+        @inbounds for q in rr, j in runs[q]
+            dst[j] = src[(keys[j] & mask) % Int + 1]
+        end
+    end
+    return nothing
 end
 
 # collect(1:n), written in parallel (a single server core writes ~13 GB/s).

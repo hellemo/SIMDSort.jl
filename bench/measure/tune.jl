@@ -54,15 +54,23 @@ function main(mods)
     for (case, gen, nt) in CASES
         x = gen()
         ref = sort(x)
-        for (lab, M) in mods
+        # A variant that fails (an error or a wrong result) is reported and
+        # left out of this case.
+        ok = filter(mods) do (lab, M)
             y = copy(x)
-            M.simdsort!(y; ntasks = nt)
-            isequal(y, ref) || @warn "wrong result" case lab
+            try
+                M.simdsort!(y; ntasks = nt)
+            catch err
+                println("  $lab: ERROR ", sprint(showerror, err)[1:min(end, 200)])
+                return false
+            end
+            isequal(y, ref) || (println("  $lab: WRONG RESULT"); return false)
+            return true
         end
-        ts = Dict(lab => Float64[] for (lab, _) in mods)
+        ts = Dict(lab => Float64[] for (lab, _) in ok)
         for _ in 1:ROUNDS
             x = gen()
-            for (lab, M) in shuffle(rng, mods)
+            for (lab, M) in shuffle(rng, ok)
                 y = copy(x)
                 GC.gc(false)
                 push!(ts[lab], @elapsed M.simdsort!(y; ntasks = nt))
@@ -70,7 +78,7 @@ function main(mods)
         end
         base = minimum(ts["baseline"])
         println("== $case (baseline $(round(base; digits = 4)) s)")
-        for (lab, _) in mods
+        for (lab, _) in ok
             b = minimum(ts[lab])
             println(io, "\"", case, "\",\"", lab, "\",", b, ",", median(ts[lab]))
             @printf("  %-22s %.4f s  %+6.1f%%\n", lab, b, 100 * (b / base - 1))

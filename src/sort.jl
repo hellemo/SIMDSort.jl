@@ -114,10 +114,17 @@ end
 # f(Val(prefetch)) with prefetching for ranges above PF_MIN_BYTES.
 @inline with_prefetch(f::F, ::Type{T}, n::Int) where {F,T} = use_prefetch(T, n) ? f(Val(true)) : f(Val(false))
 
-@inline partition_auto!(p::KeyRef{T}, n::Int, pivot::T, buf::KeyRef{T}) where {T} =
-    with_prefetch(pf -> partition!(p, n, pivot, buf, Val(UNROLL), pf), T, n)
-@inline partition3_auto!(p::KeyRef{T}, n::Int, pivot::T, buf::KeyRef{T}) where {T} =
-    with_prefetch(pf -> partition3!(p, n, pivot, buf, Val(UNROLL), pf), T, n)
+# The unrolled partition needs 2 UNROLL vectors of keys; ranges just above the
+# base case can be smaller than that (with 512-bit vectors and UNROLL > 8) and
+# take one vector per step.
+@inline function partition_auto!(p::KeyRef{T}, n::Int, pivot::T, buf::KeyRef{T}) where {T}
+    n < 2UNROLL * lanes(T) && return partition!(p, n, pivot, buf, Val(1))
+    return with_prefetch(pf -> partition!(p, n, pivot, buf, Val(UNROLL), pf), T, n)
+end
+@inline function partition3_auto!(p::KeyRef{T}, n::Int, pivot::T, buf::KeyRef{T}) where {T}
+    n < 2UNROLL * lanes(T) && return partition3!(p, n, pivot, buf, Val(1))
+    return with_prefetch(pf -> partition3!(p, n, pivot, buf, Val(UNROLL), pf), T, n)
+end
 
 """
     split!(p, n, pivot, dup, buf, partition) -> (a, b)
