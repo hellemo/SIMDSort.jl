@@ -58,16 +58,18 @@ On the AVX2 laptop, Julia 1.13.2, JuliaC 0.3.10:
 - **CPU.** The package chooses its vector code paths when it is compiled, so
   the build uses `JULIA_CPU_TARGET=native` instead of JuliaC's generic
   multi-target default. The library is for the CPU it is built on.
-- **Speed.** Times for 2^24 keys (Julia times without the copy):
+- **Speed.** Times for 2^24 keys, one call each (`lib/test/test.c`; Julia on
+  the same data, without the copy into the caller's buffer):
 
 | | C library, 1 thread | Julia, 1 thread | C library, 8 threads | Julia, 8 threads |
 |---|---:|---:|---:|---:|
-| Int64 sort | 0.133 s | 0.122 s | 0.047 s | 0.038 s |
-| Float64 sortperm | 0.615 s | 0.555 s | 0.223 s | 0.147 s |
+| Int64 sort | 0.128 s | 0.127 s | 0.042 s | 0.039 s |
+| Float64 sortperm | 0.432 s | 0.367 s | 0.132 s | 0.115 s |
 
-  The library is 9–20% slower than the same calls in Julia, and Float64
-  `sortperm` at 8 threads about 50% slower. Against C's `qsort` it is 16×
-  faster on one thread and 45× faster on eight (Int64). The first call takes
-  about 15 ms.
+  `sort` is as fast as in Julia; Float64 `sortperm` is 15–18% slower (it
+  also writes the 0-based permutation into the caller's buffer, whose pages
+  are touched for the first time). Against C's `qsort` it is 16× faster on
+  one thread and 48× faster on eight (Int64). The first call takes about
+  15 ms.
 - **Not covered:** strings, wide types and the extensions (the C API is for
   the six primitive types).

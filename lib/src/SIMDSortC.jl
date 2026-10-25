@@ -33,9 +33,14 @@ for (T, s) in ((Int32, :i32), (Int64, :i64), (UInt32, :u32), (UInt64, :u64),
                                            nthreads::Cint)::Cint
             v = unsafe_wrap(Array, data, Int(n); own = false)
             out = unsafe_wrap(Array, perm, Int(n); own = false)
-            p = simdsortperm(v; rev = rev != 0, ntasks = max(1, Int(nthreads)))
-            @inbounds for i in eachindex(p)
-                out[i] = p[i] - 1
+            nt = max(1, Int(nthreads))
+            p = simdsortperm(v; rev = rev != 0, ntasks = nt)
+            # 0-based into the caller's buffer, in parallel (its pages are
+            # often touched for the first time here).
+            SIMDSort.tforeach(length(p), nt) do r
+                @inbounds for i in r
+                    out[i] = p[i] - 1
+                end
             end
             return Cint(0)
         end
