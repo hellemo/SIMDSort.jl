@@ -103,13 +103,35 @@ function simdsortperm(v::Vector{T}; rev::Bool=false, ntasks::Integer=1) where {T
     # All components with fixed-width keys: one sort of the packed keys.
     B = packedwidth(T)
     B === nothing || return packed_tuple_sortperm(v, Val(cld(B, 64)), rev, Int(ntasks))
-    p = collect(1:n)
+    nt = Int(ntasks)
+    p = identity_perm(n, nt)
     for k in ncomponents(T):-1:1
-        col = [component(v[i], k) for i in p]
-        q = simdsortperm(col; rev, ntasks)
-        p = p[q]
+        q = simdsortperm(component_in(v, k, p, nt); rev, ntasks)
+        p = compose(p, q, nt)
     end
     return p
+end
+
+# Component k of v[p[i]] for each i, and p[q[i]] for each i, in parallel (on 8
+# threads the serial gathers took as long as the component sorts).
+function component_in(v, k::Int, p::Vector{Int}, ntasks::Int)
+    col = Vector{typeof(component(first(v), k))}(undef, length(p))
+    tforeach(length(p), ntasks) do r
+        @inbounds for i in r
+            col[i] = component(v[p[i]], k)
+        end
+    end
+    return col
+end
+
+function compose(p::Vector{Int}, q::Vector{Int}, ntasks::Int)
+    pq = similar(p)
+    tforeach(length(p), ntasks) do r
+        @inbounds for i in r
+            pq[i] = p[q[i]]
+        end
+    end
+    return pq
 end
 
 function simdsort!(v::Vector{T}; rev::Bool=false, ntasks::Integer=1) where {T<:TupleLike}
