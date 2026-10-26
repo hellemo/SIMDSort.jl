@@ -208,7 +208,7 @@ end
         end
     end
 
-    @testset "InlineStrings $T" for T in (String1, String3, String7, String15, String31, String63)
+    @testset "InlineStrings $T" for T in (String1, String3, String7, String15, String31, String63, String255)
         cap = sizeof(T) - 1
         alpha = ['a', 'b', '\0', 'é', 'z']                  # NUL and a 2-byte char too
         mk() = T(String(rand(rng, alpha, rand(rng, 0:max(0, cap ÷ 2)))))
@@ -223,10 +223,11 @@ end
             vm = Union{Missing,T}[rand(rng) < 0.1 ? missing : x for x in v]
             @test simdsortperm(vm; rev) == sortperm(vm; rev)
         end
-        # the byte-built words order as the strings do (also where uint_map is used)
+        # the byte-built words order as the strings do, and the layout was found
         ext = Base.get_extension(SIMDSort, :SIMDSortInlineStringsExt)
-        w = ext.bytewords.(v)
-        @test sortperm(w) == sortperm(v)
+        @test sortperm(ext.bytewords.(v)) == sortperm(v)
+        @test ext.LAYOUT in (1, 2) && SIMDSort.lazy_orderwords(T)
+        @test sortperm(SIMDSort.orderwords.(v)) == sortperm(v)
         if sizeof(T) <= 16
             @test SIMDSort.fixedwidth(T) == 8sizeof(T)
             tv = [(rand(rng, 1:3), x) for x in v]

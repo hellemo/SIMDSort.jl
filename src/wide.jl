@@ -276,3 +276,30 @@ function wordkeys_sortperm(w::AbstractVector{NTuple{M,UInt64}}; rev::Bool=false,
     length(w) <= 1 && return collect(1:length(w))
     return refine!(WordKeys{M}(w, rev), identity_perm(length(w), Int(ntasks)), 0, Int(ntasks); isidentity = true)
 end
+
+"""
+    LazyWordKeys(v, f, rev)
+
+The order words `f(v[i])` of the elements, computed where a window of key `i`
+is read instead of stored for all keys first ([`WordKeys`](@ref)): for types
+whose words are cheap to compute from the element (`lazy_orderwords(T)`, such
+as InlineStrings: 2e6 String63s 11 ms against 24 ms with stored words).
+"""
+struct LazyWordKeys{M,V<:AbstractVector,F} <: KeySource
+    v::V
+    f::F
+    rev::Bool
+end
+LazyWordKeys{M}(v::AbstractVector, f::F, rev::Bool) where {M,F} = LazyWordKeys{M,typeof(v),F}(v, f, rev)
+
+keywidth(::LazyWordKeys{M}) where {M} = 64M
+@inline keybits(ks::LazyWordKeys, i::Int, off::Int, K::Int) = wordbits(ks.f(@inbounds ks.v[i]), off, K, ks.rev)
+
+"""
+    lazy_orderwords(T) -> Bool
+
+Whether `simdsortperm` computes the [`orderwords`](@ref) of `T` where they are
+read ([`LazyWordKeys`](@ref)) instead of storing them for all elements first.
+`false` unless a method is added (InlineStrings: true).
+"""
+lazy_orderwords(::Type) = false

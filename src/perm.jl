@@ -474,6 +474,11 @@ function simdsortperm(v::AbstractVector; rev::Bool=false, ntasks::Integer=1)
         return firstindex(v) == 1 ? p : p .+ (firstindex(v) - 1)
     end
     if v isa Vector && has_orderwords(eltype(v))
+        if lazy_orderwords(eltype(v))
+            M = length(orderwords(first(v)))
+            return refine!(LazyWordKeys{M}(v, orderwords, rev), identity_perm(length(v), Int(ntasks)), 0,
+                           Int(ntasks); isidentity = true)
+        end
         return with_words(w -> wordkeys_sortperm(w; rev, ntasks), orderwords, v, Int(ntasks))
     end
     return sortperm(v; rev)
