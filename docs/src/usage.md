@@ -35,7 +35,8 @@ threads). With `ntasks > 1`, large inputs are sorted in parallel.
 
 ## Supported types
 
-Elements of a `Vector`:
+Elements of a `Vector` (for `simdsort!` of the primitive numbers also a
+contiguous view of one, `view(v, a:b)`, sorted in place):
 
 | Group | Types | How |
 |---|---|---|

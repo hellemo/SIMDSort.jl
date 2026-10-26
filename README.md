@@ -36,7 +36,8 @@ p = simdsortperm(v)                           # stable, as sortperm
 The order is that of `isless`: NaNs last, `-0.0` before `0.0`. `simdsortperm` is
 stable, like `sortperm`.
 
-Supported element types (in `Vector`s):
+Supported element types (in `Vector`s; `simdsort!` of the primitive numbers
+also sorts contiguous views `view(v, a:b)` in place):
 
 | Group | Types |
 |---|---|

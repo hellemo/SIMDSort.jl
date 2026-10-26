@@ -51,7 +51,8 @@ include("tuning.jl")
 
 Sort `v` in place in the order of `isless` (NaNs last, `-0.0` before `0.0`), or its
 reverse if `rev`. `Vector`s of `Int32`, `Int64`, `UInt32`, `UInt64`, `Float32`
-and `Float64` use the vectorized quicksort; anything else falls back to `sort!`.
+and `Float64`, and contiguous views of them (`view(v, a:b)`), use the
+vectorized quicksort; anything else falls back to `sort!`.
 
 With `ntasks > 1`, large subranges are sorted by up to `ntasks` concurrent tasks;
 `ntasks = Threads.nthreads()` uses all threads.
@@ -66,10 +67,16 @@ function simdsort!(v::AbstractVector; rev::Bool=false, ntasks::Integer=1)
     return sort!(v; rev)
 end
 
-function simdsort!(v::Vector{T}; rev::Bool=false, ntasks::Integer=1) where {T<:SortTypes}
+function simdsort!(v::Union{Vector{T},VectorView{T}}; rev::Bool=false, ntasks::Integer=1) where {T<:SortTypes}
     length(v) <= 1 && return v
     return sort_primitive!(keyclass(T), v, ordering(rev), Int(ntasks))
 end
+
+# The keys of v as the same memory reinterpreted as type S: for a contiguous
+# view, the same range of the reinterpreted parent (a key vector, where the
+# reinterpreted view would not be).
+keys_as(::Type{S}, v::VectorView) where {S} = view(reinterpret(S, parent(v)), parentindices(v)[1])
+keys_as(::Type{S}, v::AbstractVector) where {S} = reinterpret(S, v)
 
 """
     MappedKeys(), NativeKeys(), FloatKeys()
@@ -96,7 +103,7 @@ function sort_primitive!(::MappedKeys, v::KeyVector{T}, o::Ord, nt::Int) where {
     # Check for sorted input before the key map, which preserves the order.
     @phase(:presorted_check, presorted!(v, o, nt)) && return v
     @phase(:hash_check, hash_count_sort!(v, o, nt)) && return v
-    k = reinterpret(signedkey(T), v)     # the same memory, as signed keys
+    k = keys_as(signedkey(T), v)         # the same memory, as signed keys
     @phase :keymap foreach_chunk(c -> map_keys!(c, T, o), k, nt)
     sort_auto!(k, nt)
     @phase :keyunmap foreach_chunk(c -> unmap_keys!(c, T, o), k, nt)
@@ -120,7 +127,7 @@ end
 # Floats are sorted as floats: NaNs are moved out first, Reverse negates the
 # values (an exact involution), and since compares treat -0.0 == 0.0, the run of
 # zeros is rewritten in `isless` order afterwards from a count of the -0.0s.
-function sort_primitive!(::FloatKeys, v::Vector{T}, o::Ord, nt::Int) where {T}
+function sort_primitive!(::FloatKeys, v::Union{Vector{T},VectorView{T}}, o::Ord, nt::Int) where {T}
     nnan, nneg, npos = @phase :float_scan float_scan(v, nt)
     r = nnan == 0 ? (1:length(v)) : @phase(:nan_partition, nan_partition!(v, o))
     length(r) <= 1 && return v

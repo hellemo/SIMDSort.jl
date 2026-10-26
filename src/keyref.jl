@@ -39,10 +39,14 @@ const CHECK_KEYS = false
 # array that owns them (to keep alive while raw pointers are used).
 # Key vectors: vectors, contiguous views of them, and vectors reinterpreted as
 # integer keys of the same size (floats, Dates).
+# (A contiguous view of a vector, sorted in place, has its keys reinterpreted
+# as a view of the reinterpreted vector: the fourth kind.)
 const ReinterpretedVector{T} = Base.ReinterpretArray{T,1,S,Vector{S},false} where {S}
-const KeyVector{T} = Union{Vector{T},SubArray{T,1,Vector{T},Tuple{UnitRange{Int}},true},ReinterpretedVector{T}}
+const VectorView{T} = SubArray{T,1,Vector{T},Tuple{UnitRange{Int}},true}
+const ReinterpretedView{T} = SubArray{T,1,P,Tuple{UnitRange{Int}},true} where {P<:ReinterpretedVector{T}}
+const KeyVector{T} = Union{Vector{T},VectorView{T},ReinterpretedVector{T},ReinterpretedView{T}}
 @inline keyref(v::Vector) = (SAFE_KEYS || CHECK_KEYS) ? ArrRange(v) : pointer(v)
-@inline keyref(v::SubArray{T,1,Vector{T},Tuple{UnitRange{Int}},true}) where {T} =
+@inline keyref(v::Union{VectorView,ReinterpretedView}) =
     (SAFE_KEYS || CHECK_KEYS) ? ArrRange(parent(v), first(parentindices(v)[1]) - 1) : pointer(v)
 # A scratch buffer as a reference of the same kind as p (the caller keeps buf
 # alive while raw pointers are used).

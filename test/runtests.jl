@@ -116,6 +116,23 @@ end
         end
     end
 
+    @testset "contiguous views $T" for T in TYPES
+        # sorted in place by the vectorized path (not Base's fallback), with
+        # the elements around the view untouched
+        for dist in (:uniform, :few, :sorted, :special), n in (0, 1, 33, 1000, 10^5, 3 * 10^5 + 7),
+            rev in (false, true), nt in (1, 8)
+            buf = gen(T, dist, n + 40, rng)
+            ref = copy(buf)
+            sort!(view(ref, 21:20+n); rev)
+            w = copy(buf)
+            simdsort!(view(w, 21:20+n); rev, ntasks = nt)
+            @test isequal(w, ref)
+        end
+        v = gen(T, :uniform, 10^5 + 40, rng)
+        r = SIMDSort.instrumented(() -> simdsort!(view(v, 21:10^5+20)))
+        @test haskey(r.phases, :quicksort)
+    end
+
     @testset "partition3! $T PF=$PF" for T in (Int32, Int64, UInt32, Float32, Float64), PF in (false, true)
         N = SIMDSort.lanes(T)
         U = SIMDSort.UNROLL
