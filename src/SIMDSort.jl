@@ -44,6 +44,7 @@ include("symbols.jl")
 include("msd.jl")
 include("wide.jl")
 include("compound.jl")
+include("inputs.jl")
 include("tuning.jl")
 
 """
@@ -67,10 +68,13 @@ function simdsort!(v::AbstractVector; rev::Bool=false, ntasks::Integer=1)
         length(v) <= 1 && return v
         return sort_by_words!(v, orderwords, rev, Int(ntasks))
     end
+    length(v) <= 1 && return v
+    # Union{Missing,T} elements: the values sorted as a Vector{T}, missings last.
+    missingpath(eltype(v)) && return missing_sort!(v, rev, Int(ntasks))
     # Other arrays of an element type with a fast path for Vectors (views of
     # strings, matrix columns, strided views, CSV.jl's ChainedVector, ...):
     # sorted as a Vector copy, then copied back.
-    if !(v isa Vector) && vectorpath(eltype(v)) && length(v) > 1
+    if !(v isa Vector) && vectorpath(eltype(v))
         return copyto!(v, simdsort!(collect(v); rev, ntasks))
     end
     return sort!(v; rev)

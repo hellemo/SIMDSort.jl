@@ -54,6 +54,7 @@ end
 
 function simdsort!(v::Vector{T}; rev::Bool=false, ntasks::Integer=1) where {T<:Union{Signed,Unsigned}}
     iswideint(T) || return sort!(v; rev)
+    length(v) <= 1 && return v
     (8sizeof(T)) % 64 == 0 || return permute_by!(v, simdsortperm(v; rev, ntasks), Int(ntasks))
     return sort_by_words!(v, intwords, rev, Int(ntasks))
 end

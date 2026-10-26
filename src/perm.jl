@@ -461,6 +461,8 @@ arrays of these types (views, matrix columns, ...) are sorted as a `Vector`
 copy; other inputs fall back to `sortperm`.
 """
 function simdsortperm(v::AbstractVector; rev::Bool=false, ntasks::Integer=1)
+    # Union{Missing,T} elements: the values' permutation, missings last.
+    missingpath(eltype(v)) && length(v) > 1 && !pooled(v) && return missing_sortperm(v, rev, Int(ntasks))
     # Other arrays of an element type with a fast path for Vectors (views,
     # matrix columns, ...): the permutation of a Vector copy, in v's indices.
     # (Not pooled arrays: their sortperm sorts the refs.)

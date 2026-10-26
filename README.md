@@ -46,6 +46,7 @@ types, such as views and matrix columns, are sorted as a `Vector` copy):
 | Strings | `String`, `SubString{String}`, `StringView` (Julia 1.14+), `Symbol` |
 | Wide and arbitrary-precision numbers | `Int128`, `UInt128`, BitIntegers.jl types, `BigInt`, `BigFloat` |
 | Through extensions (weak dependencies) | Dates (`Date`, `DateTime`, `Time`, Periods), DoubleFloats.jl, MultiFloats.jl, Quadmath.jl (`Float128`) |
+| Missing values | `Union{Missing,T}` for any `T` above |
 | Composite | `Tuple`s and `Pair`s of the above, `VersionNumber` |
 
 Other element types and other array types fall back to `sort!`/`sortperm`.

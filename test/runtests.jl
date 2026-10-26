@@ -169,6 +169,27 @@ end
         @test simdsortperm(x) == sortperm(x) && issorted(simdsort!(x))
     end
 
+    @testset "missing values" begin
+        n = 3 * 10^4
+        strs = [String(rand(rng, 'a':'f', rand(rng, 0:12))) for _ in 1:n]
+        for vals in Any[rand(rng, Int64, n), randn(rng, n), [rand(rng) < 0.01 ? NaN : -0.0 for _ in 1:n],
+                        rand(rng, Int32(1):Int32(9), n), strs, rand(rng, Int128, n), rand(rng, UInt32, n)],
+            frac in (0.0, 0.1, 0.9, 1.0)
+            T = eltype(vals)
+            v = Union{Missing,T}[rand(rng) < frac ? missing : x for x in vals]
+            @test SIMDSort.missingpath(eltype(v))
+            for rev in (false, true), x in (v, view(v, 7:n-3))
+                @test simdsortperm(x; rev, ntasks = 4) == sortperm(x; rev)
+                @test isequal(simdsort!(copy(x); rev, ntasks = 4), sort(x; rev))
+            end
+        end
+        @test isequal(simdsort!(Union{Missing,Int}[missing]), [missing])
+        @test simdsort!(Int128[]) == Int128[] && simdsort!(UInt128[]) == UInt128[]   # (once a BoundsError)
+        @test simdsortperm(Union{Missing,Int}[missing, 1]) == [2, 1]
+        @test !SIMDSort.missingpath(Missing) && !SIMDSort.missingpath(Any) &&
+              !SIMDSort.missingpath(Union{Missing,Vector{Int}})
+    end
+
     @testset "partition3! $T PF=$PF" for T in (Int32, Int64, UInt32, Float32, Float64), PF in (false, true)
         N = SIMDSort.lanes(T)
         U = SIMDSort.UNROLL
