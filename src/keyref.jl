@@ -77,13 +77,33 @@ N keys as a vector from offset i, and back.
     vstc(x::Vec, r, i, mask)
 
 The lanes of x selected by mask, in order, stored from offset i (exactly
-count(mask) keys: a compress-store, native on AVX-512).
+count(mask) keys): a compress into a register, then a store masked to the first
+count(mask) lanes.
+
+Not the memory form of the compress-store (`vpcompressq [mem]`, which SIMD.jl's
+`vstorec` emits with AVX-512): on AMD Zen 4 that form is microcoded and very
+slow, while the register form and masked stores are fast. In a report from an
+EPYC 9274F (issue #1) the 512-bit partition took 1.8 ns per key and level, the
+whole sort of 2^24 Int64 0.6 s on one thread. `VSTC_MEMORY = true` restores
+the memory form (for comparisons).
 """
-@inline vstc(x::Vec{N,T}, p::Ptr{T}, i::Int, m::Vec{N,Bool}) where {N,T} = vstorec(x, p + i * sizeof(T), m)
+const VSTC_MEMORY = false
+
+@inline firstlanes(::Val{N}, c::Int) where {N} = Vec{N,Int32}(ntuple(k -> Int32(k - 1), Val(N))) < Int32(c)
+
+@inline function vstc(x::Vec{N,T}, p::Ptr{T}, i::Int, m::Vec{N,Bool}) where {N,T}
+    VSTC_MEMORY && return vstorec(x, p + i * sizeof(T), m)
+    vstore(vcompress(x, m), p + i * sizeof(T), firstlanes(Val(N), count(m)))
+    return nothing
+end
 @inline function vstc(x::Vec{N,T}, r::ArrRange{T}, i::Int, m::Vec{N,Bool}) where {N,T}
-    # (vstorec's own bounds check covers N keys, more than are written.)
+    # (the stores' own bounds checks cover N keys, more than are written)
     CHECK_KEYS && checkbounds(r.v, r.off+i+1:r.off+i+count(m))
-    @inbounds vstorec(x, r.v, r.off + i + 1, m)
+    if VSTC_MEMORY
+        @inbounds vstorec(x, r.v, r.off + i + 1, m)
+    else
+        @inbounds vstore(vcompress(x, m), r.v, r.off + i + 1, firstlanes(Val(N), count(m)))
+    end
     return nothing
 end
 
