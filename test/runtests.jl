@@ -1,4 +1,5 @@
 using SIMDSort
+using SIMD: Vec
 using Test
 using Random
 using BitIntegers
@@ -114,6 +115,26 @@ end
             v = gen(T, dist, 3 * 10^6 + 17, rng)
             @test isequal(simdsort(v; rev, ntasks=8), sort(v; rev))
         end
+    end
+
+    @testset "compress-store forms $T" for T in TYPES
+        # both forms of vstc (memory compress-store; register compress and
+        # masked store), whichever this CPU uses, at 256 and 512 bits
+        for N in (32 ÷ sizeof(T), 64 ÷ sizeof(T)), _ in 1:50
+            x = Vec{N,T}(ntuple(_ -> rand(rng, T), N))
+            m = Vec{N,Bool}(ntuple(_ -> rand(rng, Bool), N))
+            c = count(m)
+            want = [x[k] for k in 1:N if m[k]]
+            for f in (SIMDSort.vstc_mem, SIMDSort.vstc_reg)
+                v = fill(T(7), N + 4)
+                GC.@preserve v f(x, pointer(v), 2, m)
+                @test v[3:2+c] == want && all(==(T(7)), v[[1:2; 3+c:N+4]])
+                w = fill(T(7), N + 4)
+                f(x, SIMDSort.ArrRange(w), 2, m)
+                @test w == v
+            end
+        end
+        @test SIMDSort.vstc_memory() == !startswith(Sys.CPU_NAME, "znver")
     end
 
     @testset "partition3! $T PF=$PF" for T in (Int32, Int64, UInt32, Float32, Float64), PF in (false, true)

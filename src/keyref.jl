@@ -77,33 +77,45 @@ N keys as a vector from offset i, and back.
     vstc(x::Vec, r, i, mask)
 
 The lanes of x selected by mask, in order, stored from offset i (exactly
-count(mask) keys): a compress into a register, then a store masked to the first
-count(mask) lanes.
+count(mask) keys): a compress-store, in one of two forms, by CPU
+(`vstc_memory()`):
 
-Not the memory form of the compress-store (`vpcompressq [mem]`, which SIMD.jl's
-`vstorec` emits with AVX-512): on AMD Zen 4 that form is microcoded and very
-slow, while the register form and masked stores are fast. In a report from an
-EPYC 9274F (issue #1) the 512-bit partition took 1.8 ns per key and level, the
-whole sort of 2^24 Int64 0.6 s on one thread. `VSTC_MEMORY = true` restores
-the memory form (for comparisons).
+- the memory form (SIMD.jl's `vstorec`; with AVX-512 `vpcompressq` with a
+  memory operand): the default;
+- a compress into a register and a store masked to the first count(mask)
+  lanes: on AMD Zen (LLVM CPU `znver*`), where the memory form is microcoded
+  and very slow. In a report from a Zen 4 EPYC 9274F (issue #1) the 512-bit
+  partition took 1.8 ns per key and level, the sort of 2^24 Int64 0.6 s on one
+  thread; on an Ice Lake Xeon this form is 8-11% slower than the memory form
+  (one thread, 2^24 keys).
+
+`VSTC_MEMORY = true`/`false` forces a form (A/B runs); `nothing` chooses by CPU.
 """
-const VSTC_MEMORY = false
+const VSTC_MEMORY = nothing
+
+# The memory form, unless the CPU is an AMD Zen (decided when compiled, as target()).
+@generated vstc_memory() = VSTC_MEMORY === nothing ? !startswith(Sys.CPU_NAME, "znver") : VSTC_MEMORY
 
 @inline firstlanes(::Val{N}, c::Int) where {N} = Vec{N,Int32}(ntuple(k -> Int32(k - 1), Val(N))) < Int32(c)
 
-@inline function vstc(x::Vec{N,T}, p::Ptr{T}, i::Int, m::Vec{N,Bool}) where {N,T}
-    VSTC_MEMORY && return vstorec(x, p + i * sizeof(T), m)
-    vstore(vcompress(x, m), p + i * sizeof(T), firstlanes(Val(N), count(m)))
+@inline vstc(x::Vec{N,T}, p::Ptr{T}, i::Int, m::Vec{N,Bool}) where {N,T} =
+    vstc_memory() ? vstc_mem(x, p, i, m) : vstc_reg(x, p, i, m)
+@inline vstc(x::Vec{N,T}, r::ArrRange{T}, i::Int, m::Vec{N,Bool}) where {N,T} =
+    vstc_memory() ? vstc_mem(x, r, i, m) : vstc_reg(x, r, i, m)
+
+@inline vstc_mem(x::Vec{N,T}, p::Ptr{T}, i::Int, m::Vec{N,Bool}) where {N,T} =
+    (vstorec(x, p + i * sizeof(T), m); nothing)
+@inline vstc_reg(x::Vec{N,T}, p::Ptr{T}, i::Int, m::Vec{N,Bool}) where {N,T} =
+    (vstore(vcompress(x, m), p + i * sizeof(T), firstlanes(Val(N), count(m))); nothing)
+# (the stores' own bounds checks cover N keys, more than are written)
+@inline function vstc_mem(x::Vec{N,T}, r::ArrRange{T}, i::Int, m::Vec{N,Bool}) where {N,T}
+    CHECK_KEYS && checkbounds(r.v, r.off+i+1:r.off+i+count(m))
+    @inbounds vstorec(x, r.v, r.off + i + 1, m)
     return nothing
 end
-@inline function vstc(x::Vec{N,T}, r::ArrRange{T}, i::Int, m::Vec{N,Bool}) where {N,T}
-    # (the stores' own bounds checks cover N keys, more than are written)
+@inline function vstc_reg(x::Vec{N,T}, r::ArrRange{T}, i::Int, m::Vec{N,Bool}) where {N,T}
     CHECK_KEYS && checkbounds(r.v, r.off+i+1:r.off+i+count(m))
-    if VSTC_MEMORY
-        @inbounds vstorec(x, r.v, r.off + i + 1, m)
-    else
-        @inbounds vstore(vcompress(x, m), r.v, r.off + i + 1, firstlanes(Val(N), count(m)))
-    end
+    @inbounds vstore(vcompress(x, m), r.v, r.off + i + 1, firstlanes(Val(N), count(m)))
     return nothing
 end
 
