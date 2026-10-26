@@ -496,6 +496,19 @@ function simdsortperm(v::Vector{T}; rev::Bool=false,
         codes = symbol_codes(v, Int(ntasks))
         codes === nothing || return simdsortperm(codes; rev, ntasks)
     end
+    return bytes_sortperm(v, rev, Int(ntasks))
+end
+
+"""
+    bytes_sortperm(v, rev, ntasks)
+    bytes_sort!(v, rev, ntasks)
+
+The string path for a `Vector` of strings read in place (`codeunits`,
+`ncodeunits`): `String`, `SubString{String}`, `Base.StringView`s of dense bytes,
+and (extension) StringViews.jl's before Julia 1.14.
+"""
+function bytes_sortperm(v::Vector, rev::Bool, ntasks::Int)
+    length(v) <= 1 && return collect(1:length(v))
     n = length(v)
     arena = ScratchArena()
     try
@@ -522,5 +535,11 @@ function simdsort!(v::Vector{T}; rev::Bool=false, ntasks::Integer=1) where {T<:U
     T === Symbol && symbol_sort!(v, ordering(rev), Int(ntasks)) && return v
     p = simdsortperm(v; rev, ntasks)
     permute_by!(v, p, Int(ntasks))
+    return v
+end
+
+function bytes_sort!(v::Vector, rev::Bool, ntasks::Int)
+    length(v) <= 1 && return v
+    permute_by!(v, bytes_sortperm(v, rev, ntasks), ntasks)
     return v
 end

@@ -18,6 +18,7 @@ using Dates
 using PooledArrays
 using InlineStrings
 using CategoricalArrays
+using StringViews
 
 const TYPES = (Int32, UInt32, Int64, UInt64, Float32, Float64)
 
@@ -262,6 +263,27 @@ end
         pool = copy(pa.pool)
         simdsort!(pa)
         @test pa.pool == pool && issorted(pa)
+    end
+
+    @testset "StringViews (Base on Julia 1.14+, StringViews.jl before)" begin
+        n = 3 * 10^4 + 1
+        strs = [String(rand(rng, ['a', 'b', '\0', 'é'], rand(rng, 0:20))) for _ in 1:n]
+        buf = UInt8[]; offs = [0]
+        for x in strs
+            append!(buf, codeunits(x)); push!(offs, length(buf))
+        end
+        shared = [StringView(view(buf, offs[i]+1:offs[i+1])) for i in 1:n]   # one shared buffer
+        own = [StringView(collect(codeunits(x))) for x in strs]
+        for v in (shared, own)
+            @test SIMDSort.vectorpath(eltype(v))
+            for rev in (false, true)
+                @test simdsortperm(v; rev, ntasks = 4) == sortperm(strs; rev)
+                @test String.(simdsort!(copy(v); rev, ntasks = 4)) == sort(strs; rev)
+                @test simdsortperm(view(v, 2:n-1); rev) == sortperm(view(strs, 2:n-1); rev)
+                vm = Union{Missing,eltype(v)}[i % 7 == 0 ? missing : v[i] for i in 1:n]
+                @test simdsortperm(vm; rev) == sortperm(Union{Missing,String}[i % 7 == 0 ? missing : strs[i] for i in 1:n]; rev)
+            end
+        end
     end
 
     @testset "partition3! $T PF=$PF" for T in (Int32, Int64, UInt32, Float32, Float64), PF in (false, true)

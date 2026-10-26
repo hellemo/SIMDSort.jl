@@ -46,7 +46,7 @@ and `simdsort!` of a `PooledArray` or `CategoricalArray` rewrites its refs.
 | Group | Types | How |
 |---|---|---|
 | Primitive numbers | `Int32`, `Int64`, `UInt32`, `UInt64`, `Float32`, `Float64` | vectorized quicksort; counting sort for small ranges, hash counting for few distinct values; a sample-sort top level from 24 tasks |
-| Strings | `String`, `SubString{String}`, `StringView` (Julia 1.14+) | windowed MSD refinement of 64-bit key windows |
+| Strings | `String`, `SubString{String}`, `StringView` over dense bytes (Base on Julia 1.14+; StringViews.jl on 1.10-1.13) | windowed MSD refinement of 64-bit key windows, read in place |
 | Symbols | `Symbol` | hash counting by identity (few distinct), else as strings |
 | Wide numbers | `Int128`, `UInt128`, BitIntegers.jl types, `BigInt`, `BigFloat` | sample-sort distribution plus cache-resident sorts (`sort!`); windowed keys (`sortperm`) |
 | Extensions | Dates (`Date`, `DateTime`, `Time`, Periods), DoubleFloats.jl, MultiFloats.jl, Quadmath.jl (`Float128`), InlineStrings.jl (`String1` ... `String255`) | loaded with the package (weak dependencies) |
@@ -55,6 +55,25 @@ and `simdsort!` of a `PooledArray` or `CategoricalArray` rewrites its refs.
 | Missing values | `Union{Missing,T}` for any `T` above | the other values compacted (in parallel) and sorted as a `Vector{T}`; missings last (first with `rev`), as `isless` orders them |
 
 Other element types, and other array types, fall back to `sort!`/`sortperm`.
+
+String columns: the bytes are read where they are, so the layout of the data
+matters more than the type. On Julia 1.14, a column of `Base.StringView`s
+over one shared byte buffer (as Arrow-style formats store strings) sorts
+faster than a `Vector{String}`, whose strings are separate objects (2e6
+strings of 8-24 bytes, `simdsortperm`: 18 ms against 25 ms), and short
+strings as InlineStrings faster still (`String31`: 10 ms), as their bytes
+are in the vector itself.
+
+The gain comes from the layout, not from Julia 1.14 itself. To get it on
+Julia 1.10-1.13, use [StringViews.jl](https://github.com/JuliaStrings/StringViews.jl),
+whose `StringView` became `Base.StringView` in 1.14: with StringViews.jl
+loaded, SIMDSort's StringViews extension reads its views of contiguous byte
+vectors in place, as on 1.14 (`simdsortperm` of the column above: 21.5 ms on
+Julia 1.13 against 20.5 ms on 1.14). `simdsort!` of the views themselves is
+slower before 1.14 (73 ms against 45 ms), as Julia 1.14 moves such elements
+(structs holding a reference to the buffer) 2.4× faster. (Without
+StringViews.jl, Julia 1.10-1.13 have no `StringView`, and other string views
+fall back to `sortperm`.)
 
 ## Types of your own
 

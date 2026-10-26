@@ -14,6 +14,7 @@ DoubleFloats = "497a8b3b-efae-58df-a0af-a86822472b78"
 InlineStrings = "842dd82b-1e85-43dc-bf29-5d0ee9dffc48"
 MultiFloats = "bdf0d083-296b-4888-a5b6-7498122e68a5"
 Quadmath = "be4d8f0f-7fa4-5f49-b795-2f01399ab2dd"
+StringViews = "354b36f9-a18e-4713-926e-db85100087ba"
 
 [extensions]
 SIMDSortDataAPIExt = "DataAPI"
@@ -22,6 +23,7 @@ SIMDSortDoubleFloatsExt = "DoubleFloats"
 SIMDSortInlineStringsExt = "InlineStrings"
 SIMDSortMultiFloatsExt = "MultiFloats"
 SIMDSortQuadmathExt = "Quadmath"
+SIMDSortStringViewsExt = "StringViews"
 
 [sources]
 SIMD = {url = "https://github.com/hellemo/SIMD.jl", rev = "permute-compress"}
@@ -33,6 +35,7 @@ DoubleFloats = "1"
 InlineStrings = "1.4, 2"
 MultiFloats = "2, 3"
 Quadmath = "0.5, 1"
+StringViews = "1, 2"
 SIMD = "3.8"
 julia = "1.10"
 
@@ -46,7 +49,8 @@ MultiFloats = "bdf0d083-296b-4888-a5b6-7498122e68a5"
 PooledArrays = "2dfb63ee-cc39-5dd5-95bd-886bf059d720"
 Quadmath = "be4d8f0f-7fa4-5f49-b795-2f01399ab2dd"
 Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
+StringViews = "354b36f9-a18e-4713-926e-db85100087ba"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
 [targets]
-test = ["BitIntegers", "CategoricalArrays", "Dates", "DoubleFloats", "InlineStrings", "MultiFloats", "PooledArrays", "Quadmath", "Random", "Test"]
+test = ["BitIntegers", "CategoricalArrays", "Dates", "DoubleFloats", "InlineStrings", "MultiFloats", "PooledArrays", "Quadmath", "Random", "StringViews", "Test"]
