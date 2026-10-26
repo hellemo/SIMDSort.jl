@@ -50,6 +50,7 @@ the refs):
 | Wide numbers | `Int128`, `UInt128`, BitIntegers.jl types, `BigInt`, `BigFloat` | sample-sort distribution plus cache-resident sorts (`sort!`); windowed keys (`sortperm`) |
 | Extensions | Dates (`Date`, `DateTime`, `Time`, Periods), DoubleFloats.jl, MultiFloats.jl, Quadmath.jl (`Float128`) | loaded with the package (weak dependencies) |
 | Composite | `Tuple`s and `Pair`s of the above, `VersionNumber` | packed multi-word keys, or one stable pass per component |
+| Small types | `Int8`, `Int16`, `UInt8`, `UInt16`, `Char`, `Float16` | widened to 32-bit keys of the same order (`sortperm`; `sort!` of `Char` and `Float16`); `sort!` of the integers is Base's counting sort |
 | Missing values | `Union{Missing,T}` for any `T` above | the other values compacted (in parallel) and sorted as a `Vector{T}`; missings last (first with `rev`), as `isless` orders them |
 
 Other element types, and other array types, fall back to `sort!`/`sortperm`.

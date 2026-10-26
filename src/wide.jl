@@ -32,6 +32,7 @@ iswideint(::Type{T}) where {T} =
     T <: Union{Signed,Unsigned} && isbitstype(T) && sizeof(T) > 8 && isprimitivetype(T)
 
 function simdsortperm(v::Vector{T}; rev::Bool=false, ntasks::Integer=1) where {T<:Union{Signed,Unsigned}}
+    T <: SmallTypes && return small_sortperm(v, rev, Int(ntasks))
     iswideint(T) || return sortperm(v; rev)
     length(v) <= 1 && return collect(1:length(v))
     return refine!(WideIntKeys(v, rev), identity_perm(length(v), Int(ntasks)), 0, Int(ntasks); isidentity = true)

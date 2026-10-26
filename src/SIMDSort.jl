@@ -98,7 +98,7 @@ copies, a few ms at 10^6 elements, against Base's `sort!` at 7-30× the sort
 time). Extensions add methods for their types.
 """
 vectorpath(::Type{T}) where {T} =
-    T <: Union{SortTypes,ByteString,Symbol,BigInt,BigFloat,VersionNumber} || iswideint(T) ||
+    T <: Union{SortTypes,SmallTypes,ByteString,Symbol,BigInt,BigFloat,VersionNumber} || iswideint(T) ||
     (T <: TupleLike && isconcretetype(T)) || has_orderwords(T)
 
 function simdsort!(v::Union{Vector{T},VectorView{T}}; rev::Bool=false, ntasks::Integer=1) where {T<:SortTypes}

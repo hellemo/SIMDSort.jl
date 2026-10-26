@@ -142,7 +142,7 @@ end
                                 (rand(rng, Int128, n), true), (big.(rand(rng, Int64, n)), true),
                                 ([(rand(rng, 1:9), rand(rng, Int32)) for _ in 1:n], true),
                                 ([VersionNumber(rand(rng, 0:3), rand(rng, 0:3)) for _ in 1:n], true),
-                                (rand(rng, Int16, n), false)]
+                                (rand(rng, Float16, n), true), (Vector{Int}[[1], [2]][rand(rng, 1:2, n)], false)]
             T = eltype(vals)
             @test SIMDSort.vectorpath(T) == fast
             m = similar(vals, n + 10, 2)
@@ -188,6 +188,18 @@ end
         @test simdsortperm(Union{Missing,Int}[missing, 1]) == [2, 1]
         @test !SIMDSort.missingpath(Missing) && !SIMDSort.missingpath(Any) &&
               !SIMDSort.missingpath(Union{Missing,Vector{Int}})
+    end
+
+    @testset "small element types $T" for T in (Int8, Int16, UInt8, UInt16, Bool, Char, Float16)
+        @test SIMDSort.vectorpath(T) == (T !== Bool)
+        for n in (0, 1, 2, 1000, 3 * 10^4 + 7), rev in (false, true)
+            v = T === Float16 ? [rand(rng) < 0.01 ? Float16(NaN) : rand(rng, (Float16(-0.0), Float16(0.0), Float16(Inf), -floatmax(Float16), Float16(randn(rng)))) for _ in 1:n] :
+                T === Char ? [rand(rng) < 0.1 ? rand(rng, ('a', 'z', 'é', '😀', typemax(Char))) : rand(rng, Char) for _ in 1:n] :
+                rand(rng, T, n)
+            @test simdsortperm(v; rev, ntasks = 4) == sortperm(v; rev)
+            @test isequal(simdsort!(copy(v); rev, ntasks = 4), sort(v; rev))
+            @test simdsortperm(view(v, 1:2:n); rev) == sortperm(view(v, 1:2:n); rev)
+        end
     end
 
     @testset "partition3! $T PF=$PF" for T in (Int32, Int64, UInt32, Float32, Float64), PF in (false, true)
