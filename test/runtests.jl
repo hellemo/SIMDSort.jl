@@ -7,6 +7,7 @@ using MultiFloats
 using Quadmath
 using Dates
 using PooledArrays
+using InlineStrings
 
 const TYPES = (Int32, UInt32, Int64, UInt64, Float32, Float64)
 
@@ -199,6 +200,36 @@ end
             @test simdsortperm(v; rev, ntasks = 4) == sortperm(v; rev)
             @test isequal(simdsort!(copy(v); rev, ntasks = 4), sort(v; rev))
             @test simdsortperm(view(v, 1:2:n); rev) == sortperm(view(v, 1:2:n); rev)
+        end
+    end
+
+    @testset "InlineStrings $T" for T in (String1, String3, String7, String15, String31, String63)
+        cap = sizeof(T) - 1
+        alpha = ['a', 'b', '\0', 'é', 'z']                  # NUL and a 2-byte char too
+        mk() = T(String(rand(rng, alpha, rand(rng, 0:max(0, cap ÷ 2)))))
+        mkfit() = (s = String(rand(rng, alpha, rand(rng, 0:cap))); ncodeunits(s) <= cap ? T(s) : mk())
+        n = 2 * 10^4 + 3
+        v = [rand(rng) < 0.5 ? mk() : mkfit() for _ in 1:n]
+        @test SIMDSort.has_orderwords(T) && SIMDSort.vectorpath(T)
+        for rev in (false, true)
+            @test simdsortperm(v; rev, ntasks = 4) == sortperm(v; rev)
+            @test simdsort!(copy(v); rev, ntasks = 4) == sort(v; rev)
+            @test simdsortperm(view(v, 3:2:n); rev) == sortperm(view(v, 3:2:n); rev)
+            vm = Union{Missing,T}[rand(rng) < 0.1 ? missing : x for x in v]
+            @test simdsortperm(vm; rev) == sortperm(vm; rev)
+        end
+        # the byte-built words order as the strings do (also where uint_map is used)
+        ext = Base.get_extension(SIMDSort, :SIMDSortInlineStringsExt)
+        w = ext.bytewords.(v)
+        @test sortperm(w) == sortperm(v)
+        if sizeof(T) <= 16
+            @test SIMDSort.fixedwidth(T) == 8sizeof(T)
+            tv = [(rand(rng, 1:3), x) for x in v]
+            @test simdsortperm(tv) == sortperm(tv)
+            tv2 = [(x, rand(rng, Int8)) for x in v]
+            @test simdsort!(copy(tv2); rev = true) == sort(tv2; rev = true)
+        else
+            @test SIMDSort.fixedwidth(T) === nothing
         end
     end
 

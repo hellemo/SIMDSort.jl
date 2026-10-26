@@ -45,7 +45,7 @@ types, such as views and matrix columns, are sorted as a `Vector` copy):
 | Vectorized quicksort | `Int32`, `Int64`, `UInt32`, `UInt64`, `Float32`, `Float64` |
 | Strings | `String`, `SubString{String}`, `StringView` (Julia 1.14+), `Symbol` |
 | Wide and arbitrary-precision numbers | `Int128`, `UInt128`, BitIntegers.jl types, `BigInt`, `BigFloat` |
-| Through extensions (weak dependencies) | Dates (`Date`, `DateTime`, `Time`, Periods), DoubleFloats.jl, MultiFloats.jl, Quadmath.jl (`Float128`) |
+| Through extensions (weak dependencies) | Dates (`Date`, `DateTime`, `Time`, Periods), DoubleFloats.jl, MultiFloats.jl, Quadmath.jl (`Float128`), InlineStrings.jl (`String1` ... `String255`) |
 | Small types | `Int8`, `Int16`, `UInt8`, `UInt16`, `Char`, `Float16` |
 | Missing values | `Union{Missing,T}` for any `T` above |
 | Composite | `Tuple`s and `Pair`s of the above, `VersionNumber` |
