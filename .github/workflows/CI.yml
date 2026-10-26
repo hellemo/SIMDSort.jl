@@ -1,7 +1,8 @@
 # The tests on Julia 1.10 (the oldest supported) and the current release, on
 # x86-64 Linux (the AVX2 or AVX-512 code paths, as the runner's CPU has), with
-# SIMD.jl's portable lowering (SIMD_JL_GENERIC=1), and on Apple silicon (ARM:
-# the portable lowering, checked for correctness only, not tuned).
+# SIMD.jl's portable lowering (SIMD_JL_GENERIC=1), on Apple silicon (ARM:
+# the portable lowering, checked for correctness only, not tuned), and on the
+# next Julia release (experimental).
 name: CI
 on:
   push:
@@ -19,6 +20,7 @@ jobs:
     name: Julia ${{ matrix.version }}, ${{ matrix.os }}${{ matrix.generic && ', generic lowering' || '' }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
+    continue-on-error: ${{ matrix.version == 'pre' }}
     strategy:
       fail-fast: false
       matrix:
@@ -27,6 +29,8 @@ jobs:
           - {version: '1', os: ubuntu-latest}
           - {version: '1', os: ubuntu-latest, generic: true}
           - {version: '1', os: macos-latest}
+          # the next release (prerelease): experimental, its failures do not fail the workflow
+          - {version: 'pre', os: ubuntu-latest}
     env:
       JULIA_NUM_THREADS: 4
       SIMD_JL_GENERIC: ${{ matrix.generic && '1' || '' }}
@@ -40,5 +44,14 @@ jobs:
       - name: SIMD.jl fork for Julia 1.10
         if: matrix.version == '1.10'
         run: julia --project -e 'using Pkg; Pkg.add(url = "https://github.com/hellemo/SIMD.jl", rev = "permute-compress")'
+      # DoubleFloats' dependency GenericLinearAlgebra does not precompile on
+      # Julia 1.14 (it overwrites a LinearAlgebra method), which would stop the
+      # test run: drop it from the test dependencies (its tests are skipped).
+      - name: Test dependencies for the prerelease
+        if: matrix.version == 'pre'
+        run: |
+          julia -e 'using TOML; p = TOML.parsefile("Project.toml")
+                    delete!(p["extras"], "DoubleFloats"); filter!(!=("DoubleFloats"), p["targets"]["test"])
+                    open(io -> TOML.print(io, p), "Project.toml", "w")'
       - uses: julia-actions/julia-buildpkg@v1
       - uses: julia-actions/julia-runtest@v1

@@ -2,8 +2,17 @@ using SIMDSort
 using Test
 using Random
 using BitIntegers
-using DoubleFloats
 using MultiFloats
+# DoubleFloats is optional: its dependency GenericLinearAlgebra fails to
+# precompile on Julia 1.14 (it overwrites a LinearAlgebra method), and the rest
+# of the suite should still run there, without it in the test environment.
+const HAVE_DOUBLEFLOATS = Base.find_package("DoubleFloats") !== nothing && try
+    @eval using DoubleFloats
+    true
+catch e
+    @warn "DoubleFloats unavailable: its tests are skipped" exception = e
+    false
+end
 using Quadmath
 using Dates
 using PooledArrays
@@ -441,7 +450,11 @@ end
     end
 
     @testset "wide and arbitrary-precision numbers" begin
-        same(v; rev=false, nt=1) = simdsortperm(v; rev, ntasks=nt) == sortperm(v; rev) &&
+        # (The reference permutation sorts the indices by value: on Julia 1.14,
+        # Base's sortperm takes an integer-range path that calls -% on
+        # BitIntegers' types, which they do not define yet.)
+        refperm(v; rev) = sort!(collect(eachindex(v)); by = i -> v[i], rev, alg = Base.Sort.MergeSort)
+        same(v; rev=false, nt=1) = simdsortperm(v; rev, ntasks=nt) == refperm(v; rev) &&
                                    isequal(simdsort(v; rev, ntasks=nt), sort(v; rev))
         for T in (Int128, UInt128, Int256, UInt256, Int512, UInt1024)
             for v in (rand(rng, T, 2 * 10^4), rand(rng, T(0):T(5), 5000),
@@ -470,7 +483,7 @@ end
             shuffle!(rng, v)
             @test all(same(v; rev, nt) for rev in (false, true), nt in (1, 8))
         end
-        for T in (Double64, Double32)
+        for T in (HAVE_DOUBLEFLOATS ? (Double64, Double32) : ())
             v = T.(randn(rng, 2 * 10^4)) .+ T.(randn(rng, 2 * 10^4)) .* T(1e-10)
             append!(v, T[0.0, -0.0, Inf, -Inf, 1, 1, -1])
             shuffle!(rng, v)
@@ -491,7 +504,7 @@ end
                     Int128(2)^100 .+ rand(rng, Int128(0):Int128(10)^6, n),     # long common prefix
                     rand(rng, UInt128(0):UInt128(3), n) .<< 64 .+ rand(rng, UInt128, n) .>> 64,
                     Float128.(randn(rng, n)), [Float128(rand(rng, [0.0, -0.0, 1.0, NaN, -Inf])) for _ in 1:n],
-                    Double64.(randn(rng, n)) .+ Double64.(randn(rng, n)) .* 1e-20,
+                    (HAVE_DOUBLEFLOATS ? Double64.(randn(rng, n)) .+ Double64.(randn(rng, n)) .* 1e-20 : Float64[]),
                     Float64x3.(randn(rng, n)),
                     collect(zip(rand(rng, 1:50, n), randn(rng, n))),
                     [rand(rng, Int16) => rand(rng, UInt64) for _ in 1:n],
