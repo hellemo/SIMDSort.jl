@@ -38,6 +38,7 @@ julia = "1.10"
 
 [extras]
 BitIntegers = "c3b6d118-76ef-56ca-8cc7-ebb389d030a1"
+CategoricalArrays = "324d7699-5711-5eae-9e2f-1d82baa6b597"
 Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
 DoubleFloats = "497a8b3b-efae-58df-a0af-a86822472b78"
 InlineStrings = "842dd82b-1e85-43dc-bf29-5d0ee9dffc48"
@@ -48,4 +49,4 @@ Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
 [targets]
-test = ["BitIntegers", "Dates", "DoubleFloats", "InlineStrings", "MultiFloats", "PooledArrays", "Quadmath", "Random", "Test"]
+test = ["BitIntegers", "CategoricalArrays", "Dates", "DoubleFloats", "InlineStrings", "MultiFloats", "PooledArrays", "Quadmath", "Random", "Test"]

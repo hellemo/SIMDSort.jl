@@ -48,6 +48,7 @@ types, such as views and matrix columns, are sorted as a `Vector` copy):
 | Through extensions (weak dependencies) | Dates (`Date`, `DateTime`, `Time`, Periods), DoubleFloats.jl, MultiFloats.jl, Quadmath.jl (`Float128`), InlineStrings.jl (`String1` ... `String255`) |
 | Small types | `Int8`, `Int16`, `UInt8`, `UInt16`, `Char`, `Float16` |
 | Missing values | `Union{Missing,T}` for any `T` above |
+| Pooled arrays (DataAPI `refpool`) | `PooledArray`, `CategoricalArray`: sorted through their refs |
 | Composite | `Tuple`s and `Pair`s of the above, `VersionNumber` |
 
 Other element types and other array types fall back to `sort!`/`sortperm`.

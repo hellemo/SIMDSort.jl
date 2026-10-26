@@ -69,6 +69,8 @@ function simdsort!(v::AbstractVector; rev::Bool=false, ntasks::Integer=1)
         return sort_by_words!(v, orderwords, rev, Int(ntasks))
     end
     length(v) <= 1 && return v
+    # Pooled arrays (DataAPI extension): their refs rewritten by rank.
+    pooled_sort!(v, rev, Int(ntasks)) === nothing || return v
     # Union{Missing,T} elements: the values sorted as a Vector{T}, missings last.
     missingpath(eltype(v)) && return missing_sort!(v, rev, Int(ntasks))
     # Other arrays of an element type with a fast path for Vectors (views of
@@ -79,15 +81,6 @@ function simdsort!(v::AbstractVector; rev::Bool=false, ntasks::Integer=1)
     end
     return sort!(v; rev)
 end
-
-"""
-    pooled(v) -> Bool
-
-Whether `v` keeps a pool of distinct values and integer refs into it
-(`DataAPI.refpool`, through the DataAPI extension): `simdsortperm` then leaves
-it to its own `sortperm`, which sorts the refs.
-"""
-pooled(v) = false
 
 """
     vectorpath(T) -> Bool

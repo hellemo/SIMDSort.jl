@@ -38,9 +38,10 @@ threads). With `ntasks > 1`, large inputs are sorted in parallel.
 Elements of a `Vector`. For the primitive numbers, `simdsort!` also sorts a
 contiguous view `view(v, a:b)` in place; other arrays of these types (views,
 matrix columns, `reinterpret`ed vectors, CSV.jl's `ChainedVector`, ...) are
-sorted as a `Vector` copy, which costs two copies (`simdsortperm` of a pooled
-array, such as a `PooledArray`, is left to its own `sortperm`, which sorts
-the refs):
+sorted as a `Vector` copy, which costs two copies. Pooled arrays (DataAPI's
+`refpool`: PooledArrays, CategoricalArrays) are sorted through their refs: the
+pool is ranked once, `simdsortperm` is a counting sort of the refs by rank,
+and `simdsort!` of a `PooledArray` or `CategoricalArray` rewrites its refs.
 
 | Group | Types | How |
 |---|---|---|

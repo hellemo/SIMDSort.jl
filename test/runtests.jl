@@ -8,6 +8,7 @@ using Quadmath
 using Dates
 using PooledArrays
 using InlineStrings
+using CategoricalArrays
 
 const TYPES = (Int32, UInt32, Int64, UInt64, Float32, Float64)
 
@@ -159,11 +160,6 @@ end
             end
             @test isequal(m[:, 1], fill(vals[1], n + 10))        # the other column untouched
         end
-        # pooled arrays: sortperm is their own (sorting the refs), sort! a copy's
-        pa = PooledArray(rand(rng, strs[1:20], n))
-        @test SIMDSort.pooled(pa) && !SIMDSort.pooled(strs)
-        @test simdsortperm(pa; rev = true) == sortperm(pa; rev = true)
-        @test isequal(collect(simdsort!(copy(pa))), sort(collect(pa)))
         # a reinterpreted vector (sorted through a copy) and its permutation
         u = rand(rng, UInt64, n)
         x = reinterpret(Int64, copy(u))
@@ -231,6 +227,31 @@ end
         else
             @test SIMDSort.fixedwidth(T) === nothing
         end
+    end
+
+    @testset "pooled arrays" begin
+        n = 3 * 10^4 + 5
+        words = [String(rand(rng, 'a':'e', rand(rng, 0:6))) for _ in 1:300]
+        cases = Any[PooledArray(rand(rng, words[1:20], n)),
+                    PooledArray(Union{Missing,String}[rand(rng) < 0.1 ? missing : rand(rng, words[1:20]) for _ in 1:n]),
+                    PooledArray(rand(rng, words, n)),                         # many distinct (rank path)
+                    PooledArray(rand(rng, Int32(-5):Int32(5), n); compress = true),
+                    categorical(rand(rng, words[1:20], n)),
+                    categorical(rand(rng, words[1:20], n); ordered = true, levels = shuffle(rng, unique(words[1:20]))),
+                    categorical(Union{Missing,String}[rand(rng) < 0.1 ? missing : rand(rng, words[1:20]) for _ in 1:n])]
+        for v in cases, rev in (false, true)
+            @test simdsortperm(v; rev, ntasks = 4) == sortperm(v; rev)
+            @test simdsortperm(view(v, 3:n-2); rev) == sortperm(view(v, 3:n-2); rev)
+            w = copy(v)
+            @test simdsort!(w; rev, ntasks = 4) === w
+            @test isequal(collect(w), sort(collect(v); rev, lt = (a, b) -> isless(a, b)))
+            @test typeof(w) == typeof(v)
+        end
+        # sort! rewrites the refs, keeping the pool
+        pa = PooledArray(rand(rng, words[1:20], n))
+        pool = copy(pa.pool)
+        simdsort!(pa)
+        @test pa.pool == pool && issorted(pa)
     end
 
     @testset "partition3! $T PF=$PF" for T in (Int32, Int64, UInt32, Float32, Float64), PF in (false, true)

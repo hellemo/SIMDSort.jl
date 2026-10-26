@@ -133,3 +133,121 @@ function simdsort!(v::Vector{T}; rev::Bool=false, ntasks::Integer=1) where {T<:U
     end
     return v
 end
+
+# --- pooled arrays -------------------------------------------------------------------
+#
+# Arrays storing integer refs into a pool of distinct values (DataAPI's refarray
+# and refpool, through the DataAPI extension: PooledArrays, CategoricalArrays):
+# sorted by their refs. The pool values are ranked once (a sort of the pool, in
+# isless order: a CategoricalArray's by its levels, missing last); sortperm is
+# then a stable parallel counting sort of the refs by rank (with many distinct
+# values, a sortperm of the ranks), and sort! of an array that owns its refs
+# rewrites them, rank by rank.
+
+# The extension's methods; `nothing` means: not a pooled array (or a ref
+# outside the pool), take the other paths.
+pooled_sortperm(v, rev::Bool, ntasks::Int) = nothing
+pooled_sort!(v, rev::Bool, ntasks::Int) = nothing
+
+"""
+    pool_ranks(pool, ntasks) -> (rank, nr, refof)
+
+`rank[j]` is the rank (1-based, equal values equal) of the `j`-th pool entry
+(ref `first(axes(pool, 1)) + j - 1`), `nr` the number of distinct values, and
+`refof[r]` a ref of rank `r`.
+"""
+function pool_ranks(pool::AbstractVector, ntasks::Int)
+    vals = collect(pool)
+    p = simdsortperm(vals; ntasks)
+    lo = first(axes(pool, 1))
+    rank = Vector{Int}(undef, length(vals))
+    refof = Int[]
+    @inbounds for (k, j) in enumerate(p)
+        (k == 1 || !isequal(vals[j], vals[p[k-1]])) && push!(refof, lo + j - 1)
+        rank[j] = length(refof)
+    end
+    return rank, length(refof), refof
+end
+
+# The ranks of a chunk's refs counted (count) or written (codes), or false on a
+# ref outside the pool.
+function rank_chunk!(f::F, refs, r, off, rank, lo) where {F}
+    np = length(rank)
+    @inbounds for i in r
+        j = Int(refs[i+off]) - lo + 1
+        1 <= j <= np || return false
+        f(i, rank[j])
+    end
+    return true
+end
+
+"""
+    refs_sortperm(refs, pool, rev, ntasks) -> Vector{Int} or nothing
+
+The stable permutation (indices `1:length(refs)`) that sorts the values
+`pool[refs[i]]`, or `nothing` if a ref is outside the pool.
+"""
+function refs_sortperm(refs::AbstractVector{<:Integer}, pool::AbstractVector, rev::Bool, ntasks::Int)
+    n = length(refs)
+    rank, nr, _ = pool_ranks(pool, ntasks)
+    lo, off = first(axes(pool, 1)), firstindex(refs) - 1
+    cs = chunks(n, partasks(n, ntasks, PAR_MIN_KEYS))
+    nc = length(cs)
+    ok = trues(nc)
+    if nr * nc > max(n, 1 << 16) || nr >= typemax(UInt32)
+        # many distinct values: the permutation of the ranks
+        codes = Vector{UInt32}(undef, n)
+        tforeach_index(nc) do c
+            ok[c] = rank_chunk!((i, k) -> @inbounds(codes[i] = k % UInt32), refs, cs[c], off, rank, lo)
+        end
+        all(ok) || return nothing
+        return simdsortperm(codes; rev, ntasks)
+    end
+    cnt = zeros(Int, nr, nc)
+    tforeach_index(nc) do c
+        ok[c] = rank_chunk!((i, k) -> @inbounds(cnt[k, c] += 1), refs, cs[c], off, rank, lo)
+    end
+    all(ok) || return nothing
+    s = 1
+    @inbounds for k in (rev ? (nr:-1:1) : (1:nr)), c in 1:nc       # rank-major starts
+        t = cnt[k, c]
+        cnt[k, c] = s
+        s += t
+    end
+    out = Vector{Int}(undef, n)
+    tforeach_index(nc) do c
+        rank_chunk!(refs, cs[c], off, rank, lo) do i, k
+            @inbounds p = cnt[k, c]
+            @inbounds out[p] = i
+            @inbounds cnt[k, c] = p + 1
+        end
+    end
+    return out
+end
+
+"""
+    refs_sort!(refs, pool, rev, ntasks) -> refs or nothing
+
+Rewrite `refs` so that `pool[refs[i]]` is sorted: the refs of each rank in
+turn, as many as there were (`nothing` if a ref is outside the pool).
+"""
+function refs_sort!(refs::AbstractVector{R}, pool::AbstractVector, rev::Bool, ntasks::Int) where {R<:Integer}
+    n = length(refs)
+    rank, nr, refof = pool_ranks(pool, ntasks)
+    lo, off = first(axes(pool, 1)), firstindex(refs) - 1
+    cs = chunks(n, partasks(n, ntasks, PAR_MIN_KEYS))
+    cnts = [zeros(Int, nr) for _ in cs]
+    ok = trues(length(cs))
+    tforeach_index(length(cs)) do c
+        cn = cnts[c]
+        ok[c] = rank_chunk!((i, k) -> @inbounds(cn[k] += 1), refs, cs[c], off, rank, lo)
+    end
+    all(ok) || return nothing
+    total = reduce(+, cnts)
+    pos = firstindex(refs)
+    for k in (rev ? (nr:-1:1) : (1:nr))
+        fill!(view(refs, pos:pos+total[k]-1), R(refof[k]))
+        pos += total[k]
+    end
+    return refs
+end

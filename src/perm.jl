@@ -461,17 +461,19 @@ arrays of these types (views, matrix columns, ...) are sorted as a `Vector`
 copy; other inputs fall back to `sortperm`.
 """
 function simdsortperm(v::AbstractVector; rev::Bool=false, ntasks::Integer=1)
+    length(v) <= 1 && return collect(eachindex(v))
+    # Pooled arrays (DataAPI extension): a counting sort of the refs by rank.
+    p = pooled_sortperm(v, rev, Int(ntasks))
+    p === nothing || return p
     # Union{Missing,T} elements: the values' permutation, missings last.
-    missingpath(eltype(v)) && length(v) > 1 && !pooled(v) && return missing_sortperm(v, rev, Int(ntasks))
+    missingpath(eltype(v)) && return missing_sortperm(v, rev, Int(ntasks))
     # Other arrays of an element type with a fast path for Vectors (views,
     # matrix columns, ...): the permutation of a Vector copy, in v's indices.
-    # (Not pooled arrays: their sortperm sorts the refs.)
-    if !(v isa Vector) && vectorpath(eltype(v)) && !pooled(v) && length(v) > 1
+    if !(v isa Vector) && vectorpath(eltype(v))
         p = simdsortperm(collect(v); rev, ntasks)
         return firstindex(v) == 1 ? p : p .+ (firstindex(v) - 1)
     end
     if v isa Vector && has_orderwords(eltype(v))
-        length(v) <= 1 && return collect(1:length(v))
         return with_words(w -> wordkeys_sortperm(w; rev, ntasks), orderwords, v, Int(ntasks))
     end
     return sortperm(v; rev)
