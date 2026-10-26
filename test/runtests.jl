@@ -6,6 +6,7 @@ using DoubleFloats
 using MultiFloats
 using Quadmath
 using Dates
+using PooledArrays
 
 const TYPES = (Int32, UInt32, Int64, UInt64, Float32, Float64)
 
@@ -131,6 +132,41 @@ end
         v = gen(T, :uniform, 10^5 + 40, rng)
         r = SIMDSort.instrumented(() -> simdsort!(view(v, 21:10^5+20)))
         @test haskey(r.phases, :quicksort)
+    end
+
+    @testset "other arrays of fast-path types (Vector copies)" begin
+        n = 3 * 10^4
+        strs = [String(rand(rng, 'a':'f', rand(rng, 0:12))) for _ in 1:n]
+        syms = Symbol.(rand(rng, strs[1:50], n))
+        for (vals, fast) in Any[(rand(rng, Int64, n), true), (strs, true), (syms, true),
+                                (rand(rng, Int128, n), true), (big.(rand(rng, Int64, n)), true),
+                                ([(rand(rng, 1:9), rand(rng, Int32)) for _ in 1:n], true),
+                                ([VersionNumber(rand(rng, 0:3), rand(rng, 0:3)) for _ in 1:n], true),
+                                (rand(rng, Int16, n), false)]
+            T = eltype(vals)
+            @test SIMDSort.vectorpath(T) == fast
+            m = similar(vals, n + 10, 2)
+            fill!(view(m, :, 1), vals[1])
+            m[1:n, 2] .= vals
+            m[n+1:end, 2] .= vals[1:10]
+            for x in (view(copy(vals), 6:n-5), view(m, :, 2), view(copy(vals), 1:3:n),
+                      view(copy(vals), n:-1:1)), rev in (false, true)
+                @test simdsortperm(x; rev, ntasks = 4) == sortperm(x; rev)
+                ref = sort!(collect(x); rev)
+                xs = simdsort!(x; rev, ntasks = 4)
+                @test xs === x && isequal(collect(x), ref)
+            end
+            @test isequal(m[:, 1], fill(vals[1], n + 10))        # the other column untouched
+        end
+        # pooled arrays: sortperm is their own (sorting the refs), sort! a copy's
+        pa = PooledArray(rand(rng, strs[1:20], n))
+        @test SIMDSort.pooled(pa) && !SIMDSort.pooled(strs)
+        @test simdsortperm(pa; rev = true) == sortperm(pa; rev = true)
+        @test isequal(collect(simdsort!(copy(pa))), sort(collect(pa)))
+        # a reinterpreted vector (sorted through a copy) and its permutation
+        u = rand(rng, UInt64, n)
+        x = reinterpret(Int64, copy(u))
+        @test simdsortperm(x) == sortperm(x) && issorted(simdsort!(x))
     end
 
     @testset "partition3! $T PF=$PF" for T in (Int32, Int64, UInt32, Float32, Float64), PF in (false, true)

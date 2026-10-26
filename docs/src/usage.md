@@ -35,8 +35,12 @@ threads). With `ntasks > 1`, large inputs are sorted in parallel.
 
 ## Supported types
 
-Elements of a `Vector` (for `simdsort!` of the primitive numbers also a
-contiguous view of one, `view(v, a:b)`, sorted in place):
+Elements of a `Vector`. For the primitive numbers, `simdsort!` also sorts a
+contiguous view `view(v, a:b)` in place; other arrays of these types (views,
+matrix columns, `reinterpret`ed vectors, CSV.jl's `ChainedVector`, ...) are
+sorted as a `Vector` copy, which costs two copies (`simdsortperm` of a pooled
+array, such as a `PooledArray`, is left to its own `sortperm`, which sorts
+the refs):
 
 | Group | Types | How |
 |---|---|---|

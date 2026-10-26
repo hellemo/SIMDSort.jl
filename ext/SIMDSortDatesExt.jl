@@ -9,6 +9,7 @@ import SIMDSort: simdsort!, simdsortperm
 const Int64Like = Union{Date,DateTime,Time,Dates.FixedPeriod,Dates.OtherPeriod}
 
 ok(::Type{T}) where {T} = isconcretetype(T) && isbitstype(T) && sizeof(T) == 8
+SIMDSort.vectorpath(::Type{T}) where {T<:Int64Like} = ok(T)
 
 # As components of tuples and pairs.
 SIMDSort.fixedwidth(::Type{T}) where {T<:Int64Like} = ok(T) ? 64 : nothing

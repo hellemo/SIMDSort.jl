@@ -455,11 +455,20 @@ end
 
 The permutation that sorts `v` stably (as `sortperm(v; rev)`), for vectors of
 `Int32`, `Int64`, `UInt32`, `UInt64`, `Float32`, `Float64`, `String` and
-`Symbol`. Positions and key bits are packed into `UInt64`s and sorted with the
-vectorized quicksort; other inputs fall back to `sortperm`.
+`Symbol` (and the other types of [`simdsort!`](@ref)). Positions and key bits
+are packed into `UInt64`s and sorted with the vectorized quicksort. Other
+arrays of these types (views, matrix columns, ...) are sorted as a `Vector`
+copy; other inputs fall back to `sortperm`.
 """
 function simdsortperm(v::AbstractVector; rev::Bool=false, ntasks::Integer=1)
-    if has_orderwords(eltype(v))
+    # Other arrays of an element type with a fast path for Vectors (views,
+    # matrix columns, ...): the permutation of a Vector copy, in v's indices.
+    # (Not pooled arrays: their sortperm sorts the refs.)
+    if !(v isa Vector) && vectorpath(eltype(v)) && !pooled(v) && length(v) > 1
+        p = simdsortperm(collect(v); rev, ntasks)
+        return firstindex(v) == 1 ? p : p .+ (firstindex(v) - 1)
+    end
+    if v isa Vector && has_orderwords(eltype(v))
         length(v) <= 1 && return collect(1:length(v))
         return with_words(w -> wordkeys_sortperm(w; rev, ntasks), orderwords, v, Int(ntasks))
     end

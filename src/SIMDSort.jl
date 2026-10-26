@@ -52,7 +52,10 @@ include("tuning.jl")
 Sort `v` in place in the order of `isless` (NaNs last, `-0.0` before `0.0`), or its
 reverse if `rev`. `Vector`s of `Int32`, `Int64`, `UInt32`, `UInt64`, `Float32`
 and `Float64`, and contiguous views of them (`view(v, a:b)`), use the
-vectorized quicksort; anything else falls back to `sort!`.
+vectorized quicksort, in place. Other element types with a fast path
+(strings, symbols, wide and arbitrary-precision numbers, tuples, Dates, ...)
+are sorted in `Vector`s; other arrays of them (views, matrix columns, ...) as
+a `Vector` copy. Anything else falls back to `sort!`.
 
 With `ntasks > 1`, large subranges are sorted by up to `ntasks` concurrent tasks;
 `ntasks = Threads.nthreads()` uses all threads.
@@ -64,8 +67,35 @@ function simdsort!(v::AbstractVector; rev::Bool=false, ntasks::Integer=1)
         length(v) <= 1 && return v
         return sort_by_words!(v, orderwords, rev, Int(ntasks))
     end
+    # Other arrays of an element type with a fast path for Vectors (views of
+    # strings, matrix columns, strided views, CSV.jl's ChainedVector, ...):
+    # sorted as a Vector copy, then copied back.
+    if !(v isa Vector) && vectorpath(eltype(v)) && length(v) > 1
+        return copyto!(v, simdsort!(collect(v); rev, ntasks))
+    end
     return sort!(v; rev)
 end
+
+"""
+    pooled(v) -> Bool
+
+Whether `v` keeps a pool of distinct values and integer refs into it
+(`DataAPI.refpool`, through the DataAPI extension): `simdsortperm` then leaves
+it to its own `sortperm`, which sorts the refs.
+"""
+pooled(v) = false
+
+"""
+    vectorpath(T) -> Bool
+
+Whether `simdsort!`/`simdsortperm` have a fast path for a `Vector{T}`. Other
+arrays with elements of type `T` are then sorted as a `Vector` copy (two
+copies, a few ms at 10^6 elements, against Base's `sort!` at 7-30× the sort
+time). Extensions add methods for their types.
+"""
+vectorpath(::Type{T}) where {T} =
+    T <: Union{SortTypes,ByteString,Symbol,BigInt,BigFloat,VersionNumber} || iswideint(T) ||
+    (T <: TupleLike && isconcretetype(T)) || has_orderwords(T)
 
 function simdsort!(v::Union{Vector{T},VectorView{T}}; rev::Bool=false, ntasks::Integer=1) where {T<:SortTypes}
     length(v) <= 1 && return v

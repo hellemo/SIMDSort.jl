@@ -37,7 +37,8 @@ The order is that of `isless`: NaNs last, `-0.0` before `0.0`. `simdsortperm` is
 stable, like `sortperm`.
 
 Supported element types (in `Vector`s; `simdsort!` of the primitive numbers
-also sorts contiguous views `view(v, a:b)` in place):
+also sorts contiguous views `view(v, a:b)` in place, and other arrays of these
+types, such as views and matrix columns, are sorted as a `Vector` copy):
 
 | Group | Types |
 |---|---|

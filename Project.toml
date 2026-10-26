@@ -8,12 +8,14 @@ license = "MIT"
 SIMD = "fdea26ae-647d-5447-a871-4b548cad5224"
 
 [weakdeps]
+DataAPI = "9a962f9c-6df0-11e9-0e5d-c546b8b5ee8a"
 Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
 DoubleFloats = "497a8b3b-efae-58df-a0af-a86822472b78"
 MultiFloats = "bdf0d083-296b-4888-a5b6-7498122e68a5"
 Quadmath = "be4d8f0f-7fa4-5f49-b795-2f01399ab2dd"
 
 [extensions]
+SIMDSortDataAPIExt = "DataAPI"
 SIMDSortDatesExt = "Dates"
 SIMDSortDoubleFloatsExt = "DoubleFloats"
 SIMDSortMultiFloatsExt = "MultiFloats"
@@ -24,6 +26,7 @@ SIMD = {url = "https://github.com/hellemo/SIMD.jl", rev = "permute-compress"}
 
 [compat]
 BitIntegers = "0.3"
+DataAPI = "1"
 DoubleFloats = "1"
 MultiFloats = "2, 3"
 Quadmath = "0.5, 1"
@@ -35,9 +38,10 @@ BitIntegers = "c3b6d118-76ef-56ca-8cc7-ebb389d030a1"
 Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
 DoubleFloats = "497a8b3b-efae-58df-a0af-a86822472b78"
 MultiFloats = "bdf0d083-296b-4888-a5b6-7498122e68a5"
+PooledArrays = "2dfb63ee-cc39-5dd5-95bd-886bf059d720"
 Quadmath = "be4d8f0f-7fa4-5f49-b795-2f01399ab2dd"
 Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
 [targets]
-test = ["BitIntegers", "Dates", "DoubleFloats", "MultiFloats", "Quadmath", "Random", "Test"]
+test = ["BitIntegers", "Dates", "DoubleFloats", "MultiFloats", "PooledArrays", "Quadmath", "Random", "Test"]
